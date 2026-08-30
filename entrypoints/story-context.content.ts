@@ -5,6 +5,7 @@ import type {
     SupportedPlatform,
     DetectedPost,
     PostContext,
+    PanelController,
 } from "@/utils/types";
 
 let articlePageCache: boolean | null = null;
@@ -170,21 +171,39 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
     let panelOpen = false;
     let panelTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const clearPanelTimer = () => {
+        if (panelTimer) {
+            clearTimeout(panelTimer);
+
+            panelTimer = null;
+        }
+    };
+    const closePanel = () => {
+        clearPanelTimer();
+        removePanel(widget);
+
+        panelOpen = false;
+    };
+
     widget.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
 
         if (panelOpen) {
-            if (panelTimer) clearTimeout(panelTimer);
-            removePanel(widget);
-
-            panelOpen = false;
+            closePanel();
         } else {
-            showVotePanel(widget, context, () => {
-                panelTimer = setTimeout(() => {
-                    removePanel(widget);
-                    panelOpen = false;
-                }, autoCloseMs);
+            panelOpen = true;
+
+            showVotePanel(widget, context, {
+                startIdleTimer: () => {
+                    panelTimer = setTimeout(closePanel, autoCloseMs);
+                },
+                cancelIdleTimer: clearPanelTimer,
+                closeAfterResponse: () => {
+                    clearPanelTimer();
+
+                    panelTimer = setTimeout(closePanel, 1000);
+                },
             });
 
             panelOpen = true;
@@ -195,7 +214,7 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
     postElement.appendChild(widget);
 };
 
-async function showVotePanel(widget: HTMLElement, context: PostContext, onVoted: () => void) {
+async function showVotePanel(widget: HTMLElement, context: PostContext, controller: PanelController) {
     const panel = document.createElement("div");
 
     panel.className = "sw-inline-panel";
@@ -240,6 +259,7 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, onVoted:
             if (!category) 
                 return;
 
+            controller.cancelIdleTimer();
             status.textContent = "Submitting...";
 
             const initResponse = await browser.runtime.sendMessage({
@@ -249,6 +269,7 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, onVoted:
 
             if (!initResponse?.ok || !initResponse.data?.contentId) {
                 status.textContent = "Could not register.";
+                controller.closeAfterResponse();
 
                 return;
             }
@@ -269,12 +290,14 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, onVoted:
             } else {
                 status.textContent = "Vote failed.";
             }
+
+            controller.closeAfterResponse();
         });
     });
 
     widget.appendChild(panel);
 
-    onVoted();
+    controller.startIdleTimer();
 };
 
 function removePanel(widget: HTMLElement) {
@@ -333,12 +356,8 @@ function computeIsArticlePage(): boolean {
         }
     }
 
-    // 3. Fallback: a single <article> with an <h1>
-    const articles = document.querySelectorAll("article");
-
-    if (articles.length===1 && articles[0].querySelector("h1")) {
-        return true;
-    }
-
+    // No explicit article metadata found - don't treat it as an article then
+    // Modern web apps (GitHub, dashboards) use <article> for UI components,
+    // so a loose <article>+<h1> fallback causes false positives.
     return false;
 };

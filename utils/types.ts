@@ -67,3 +67,9 @@ export type DetectedPost = {
     element: HTMLElement;
     context: PostContext;
 };
+
+export type PanelController = {
+    startIdleTimer: () => void;
+    cancelIdleTimer: () => void;
+    closeAfterResponse: () => void;
+};
