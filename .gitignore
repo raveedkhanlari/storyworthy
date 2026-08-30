@@ -1,0 +1,18 @@
+# Extension build output
+.output/
+.wxt/
+
+# Dependencies
+node_modules/
+
+# Backend build + SAM artifacts
+backend/dist
+backend/.aws-sam/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db

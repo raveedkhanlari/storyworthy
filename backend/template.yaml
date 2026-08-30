@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: StoryWorthy backend - content init,voting, and user profiles
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 10
+    MemorySize: 128
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        USERS_TABLE: !Ref UsersTable
+        CONTENT_TABLE: !Ref ContentTable
+        VOTES_TABLE: !Ref VotesTable
+
+Resources:
+  # --- DynamoDB Tables --- #
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: installId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: installId
+          KeyType: HASH
+
+  ContentTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: contentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: contentId
+          KeyType: HASH
+
+  VotesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: contentId
+          AttributeType: S
+        - AttributeName: installId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: contentId
+          KeyType: HASH
+        - AttributeName: installId
+          KeyType: RANGE
+
+  # --- Lambda Functions --- #
+  ContentInitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: content-init.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ContentTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/content/init
+            Method: POST
+
+  ContentVoteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: content-vote.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ContentTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/content/{contentId}/vote
+            Method: POST
+
+  UsersBootstrapFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: users-bootstrap.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/users/bootstrap
+            Method: POST
+
+  # --- HTTP API with CORS --- #
+  StoryWorthyApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "content-type"
+        AllowMethods:
+          - POST
+          - OPTIONS
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the StoryWorthy API
+    Value: !Sub "https://${StoryWorthyApi}.execute-api.${AWS::Region}.amazonaws.com"

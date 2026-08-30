@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport" 
+            content="width=device-width, initial-scale=1.0" 
+        />
+        <title>Storyworthy</title>
+        <style>
+            :root {
+                --bg: #0f1115;
+                --panel: #171a21;
+                --panel-2: #1f2430;
+                --text: #eef2f7;
+                --muted: #9ba7ba;
+                --accent: #58c4a5;
+                --accent-2: #3aa78a;
+                --danger: #ff6b6b;
+                --radius: 14px;
+                --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+                background: var(--bg);
+                color: var(--text);
+                font: 14px/1.45 Inter, Segoe UI, Roboto, Aerial, sans-serif;
+            }
+
+            body {
+                min-height: 100vh;
+            }
+
+            .app {
+                display: grid;
+                gap: 16px;
+                padding: 16px;
+            }
+
+            .card {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                box-shadow: var(--shadow);
+                padding: 16px;
+            }
+
+            .hero h1 {
+                margin: 0 0 6px;
+                font-size: 24px;
+            }
+
+            .hero p,
+            .muted {
+                margin: 0;
+                color: var(--muted);
+            }
+
+            .kicker {
+                color: var(--accent);
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin-bottom: 8px;
+            }
+
+            .section-title {
+                margin: 0 0 12px;
+                font-size: 15px;
+            }
+
+            .stack {
+                display: grid;
+                gap: 12px;
+            }
+
+            .field {
+                display: grid;
+                gap: 6px;
+            }
+
+            label {
+                font-size: 12px;
+                color: var(--muted);
+            }
+
+            input,
+            select {
+                width: 100%;
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                background: var(--panel-2);
+                color: var(--text);
+                padding: 10px 12px;
+                outline: none;
+            }
+
+            input:focus,
+            select:focus {
+                border-color: var(--accent);
+            }
+
+            .checkbox-row {
+                display: flex;
+                gap: 10px;
+                align-items: flex-start;
+            }
+
+            .checkbox-row input {
+                width: 16px;
+                height: 16px;
+                margin-top: 2px;
+            }
+
+            .button-row {
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+
+            button {
+                border: 0;
+                border-radius: 10px;
+                padding: 10px 14px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .btn-primary {
+                background: var(--accent);
+                color: #08110f;
+            }
+
+            .btn-primary:hover {
+                background: var(--accent-2);
+            }
+
+            #profile-form .btn-primary {
+                background: #f5c518;
+                color: #0d9668;
+            }
+
+            .btn-secondary {
+                background: var(--panel-2);
+                color: var(--text);
+                border: 1px solid var(--border);
+            }
+
+            .meta-list {
+                display: grid;
+                gap: 8px;
+            }
+
+            .meta-item {
+                display: grid;
+                gap: 2px;
+                padding: 10px 12px;
+                background: var(--panel-2);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+            }
+
+            .meta-label {
+                font-size: 12px;
+                color: var(--muted);
+                margin-bottom: 6px;
+            }
+
+            .status {
+                min-height: 20px;
+                color: var(--muted);
+                font-size: 13px;
+            }
+
+            .status.error {
+                color: var(--danger);
+            }
+
+            .status.success {
+                color: var(--accent);
+            }
+
+            .empty {
+                color: var(--muted);
+            }
+
+            a {
+                color: var(--accent);
+            }
+        </style>
+    </head>
+    <body>
+        <main
+            class="app"
+        >
+            <section
+                class="card hero"
+            >
+                <div
+                    class="kicker"
+                >
+                    Storyworthy
+                </div>
+                <h1>
+                    Turn interesting posts into story leads.
+                </h1>
+                <p>
+                    Save a quick creative read on the current page, track what kind of plot it suggests, and build a resuable bank of ideas.
+                </p>
+            </section>
+            <div
+                id="offline-banner"
+                class="card"
+                style="background: #2a1f1f; border-color: #ff6b6b33; display: none;"
+            >
+                <p
+                    class="muted"
+                    style="margin: 0; color: #ff6b6b;"
+                >
+                    You're offline. Votes will be saved locally and synced when you reconnect.
+                </p>
+            </div>
+            <section
+                class="card"
+            >
+                <h2
+                    class="section-title"
+                >
+                    Profile
+                </h2>
+                <form
+                    id="profile-form"
+                    class="stack"
+                >
+                    <div 
+                        class="field"
+                    >
+                        <label
+                            for="country"
+                        >
+                            Country
+                        </label>
+                        <input 
+                            id="country"
+                            name="country"
+                            type="text"
+                            placeholder="e.g. Canada"
+                            required
+                        />
+                    </div>
+                    <div 
+                        class="field"
+                    >
+                        <label
+                            for="region"
+                        >
+                            Region / Province / State
+                        </label>
+                        <input 
+                            id="region"
+                            name="region"
+                            type="text"
+                            placeholder="e.g. Ontario"
+                        />
+                    </div>
+                    <div 
+                        class="field"
+                    >
+                        <label
+                            for="email"
+                        >
+                            Email (optional)
+                        </label>
+                        <input 
+                            id="email"
+                            name="email"
+                            type="email"
+                            placeholder="e.g. you@example.com"
+                        />
+                    </div> 
+                    <label
+                        class="checkbox-row"
+                    >
+                        <input 
+                            id="emailOptIn"
+                            name="emailOptIn"
+                            type="checkbox"
+                        />
+                        <span
+                            class="muted"
+                        >
+                            Send occasional updates and curated storyworthy content to my email address.
+                        </span>
+                    </label>
+                    <div
+                        class="button-row"
+                    >
+                        <button
+                            type="submit"
+                            class="btn-primary"
+                        >
+                            Save Profile
+                        </button>
+                    </div>               
+                    <div
+                        class="status"
+                        id="profile-status"
+                        aria-live="polite"
+                    >
+                    </div>
+                    <div class="field">
+                        <div class="meta-label">
+                            Profile Status
+                        </div>
+                        <div class="meta-item" id="profile-summary">
+                            Not saved yet.
+                        </div>
+                    </div>
+                </form>
+            </section>
+            <section
+                class="card"
+                id="history-section"
+            >
+                <h2
+                    class="section-title"
+                >
+                    Recent Votes
+                </h2>
+                <div
+                    id="history-empty"
+                    class="empty"
+                >
+                    No votes yet. Find something storyworthy!
+                </div>
+                <div
+                    id="history-list"
+                    class="meta-list"
+                    hidden
+                >
+                </div>
+            </section>
+        </main>
+        <script
+            type="module"
+            src="../src/sidepanel.ts"
+        >
+        </script>
+    </body>
+</html>
