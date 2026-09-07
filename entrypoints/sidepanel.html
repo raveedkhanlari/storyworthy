@@ -40,8 +40,8 @@
 
             .app {
                 display: grid;
-                gap: 16px;
-                padding: 16px;
+                gap: 10px;
+                padding: 12px;
             }
 
             .card {
@@ -49,12 +49,12 @@
                 border: 1px solid var(--border);
                 border-radius: var(--radius);
                 box-shadow: var(--shadow);
-                padding: 16px;
+                padding: 12px 16px;
             }
 
             .hero h1 {
-                margin: 0 0 6px;
-                font-size: 24px;
+                margin: 0 0 4px;
+                font-size: 20px;
             }
 
             .hero p,
@@ -73,13 +73,13 @@
             }
 
             .section-title {
-                margin: 0 0 12px;
+                margin: 0 0 10px;
                 font-size: 15px;
             }
 
             .stack {
                 display: grid;
-                gap: 12px;
+                gap: 10px;
             }
 
             .field {
@@ -143,7 +143,8 @@
                 background: var(--accent-2);
             }
 
-            #profile-form .btn-primary {
+            #profile-form .btn-primary,
+            #auth-section .btn-primary {
                 background: #f5c518;
                 color: #0d9668;
             }
@@ -188,6 +189,25 @@
                 color: var(--accent);
             }
 
+            .status.notice {
+                color: #f5c518;
+            }
+
+            #auth-status {
+                min-height: 0;
+                margin: -6px 0 12px;
+            }
+
+            #auth-status:empty,
+            #profile-prompt:empty {
+                display: none;
+            }
+
+            .label-tag {
+                color: var(--accent);
+                font-weight: 600;
+            }
+
             .empty {
                 color: var(--muted);
             }
@@ -230,12 +250,91 @@
             </div>
             <section
                 class="card"
+                id="auth-section"
+            >
+                <h2 class="section-title">Account</h2>
+                <div class="status notice" id="auth-status" aria-live="polite"></div>
+                <!-- Email step (also shows the signed-in email, disabled) -->
+                <form
+                    id="auth-email-form"
+                    class="stack"
+                >
+                    <div class="field">
+                        <label for="auth-email">
+                            Email<span id="auth-email-tag" class="label-tag" hidden> (signed in)</span>
+                        </label>
+                        <input
+                            id="auth-email"
+                            name="auth-email"
+                            type="email"
+                            placeholder="you@example.com"
+                            autocomplete="email"
+                            required
+                        />
+                    </div>
+                    <div class="button-row">
+                        <button
+                            type="submit"
+                            class="btn-primary"
+                            id="auth-send-btn"
+                        >
+                            Send sign-in code
+                        </button>
+                        <button
+                            type="button"
+                            class="btn-primary"
+                            id="auth-signout"
+                            hidden
+                        >
+                            Sign out
+                        </button>
+                    </div>
+                </form>
+                <!-- Code step (hidden until a code is sent) -->
+                 <form
+                    id="auth-code-form"
+                    class="stack"
+                    hidden
+                 >
+                    <div class="field">
+                        <label for="auth-code">6-digit code</label>
+                        <input
+                            id="auth-code"
+                            name="auth-code"
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="6"
+                            placeholder="123456"
+                            autocomplete="one-time-code"
+                        />
+                    </div>
+                    <div class="button-row">
+                        <button
+                            type="submit"
+                            class="btn-primary"
+                        >
+                            Verify &amp; sign in
+                        </button>
+                        <button
+                            type="button"
+                            class="btn-secondary"
+                            id="auth-cancel"
+                        >
+                            &larr; Change email
+                        </button>
+                    </div>
+                 </form>
+            </section>
+            <section
+                class="card"
+                id="profile-section"
             >
                 <h2
                     class="section-title"
                 >
                     Profile
                 </h2>
+                <div class="status notice" id="profile-prompt" hidden></div>
                 <form
                     id="profile-form"
                     class="stack"

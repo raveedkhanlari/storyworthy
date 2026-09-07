@@ -8,16 +8,19 @@ import type {
     ExtensionMessage,
     ApiEnvelope,
     VoteRecord,
+    AuthState,
 } from "@/utils/types";
 
 const STORAGE_KEYS = {
     installId: "sw_install_id",
     profile: "sw_profile",
     votes: "sw_votes",
+    auth: "sw_auth", // { token, userId, email }
 } as const;
 
 export default defineBackground(() => {
     const API_BASE = import.meta.env.WXT_API_BASE_URL || "https://api.storyworthy.app";
+    type StoredAuth = { token: string, userId: string, email: string };
 
     browser.runtime.onInstalled.addListener(async (details: Browser.runtime.InstalledDetails) => {
         await getInstallId();
@@ -66,6 +69,38 @@ export default defineBackground(() => {
                     .then(sendResponse)
                     .catch((error: Error) => sendResponse({
                         ok: false, error: error.message
+                    }));
+                return true;
+            case "SW_GET_AUTH_STATE":
+                getAuthState()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_AUTH_REQUEST_CODE":
+                authRequestCode(message.payload.email)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_AUTH_VERIFY_CODE":
+                authVerifyCode(message.payload.email, message.payload.code)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                    return true;
+            case "SW_AUTH_SIGN_OUT":
+                authSignOut()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
                     }));
                 return true;
             default:
@@ -229,7 +264,10 @@ export default defineBackground(() => {
             const installId = await getInstallId();
             const response = await fetch(`${API_BASE}/api/content/${payload.contentId}/vote`, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: { 
+                    "content-type": "application/json",
+                    ...(await authHeaders()), 
+                },
                 body: JSON.stringify({ 
                     installId,
                     category: payload.category,
@@ -352,7 +390,10 @@ export default defineBackground(() => {
             try {
                 const response = await fetch(`${API_BASE}/api/content/${vote.contentId}/vote`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { 
+                        "Content-Type": "application/json", 
+                        ...(await authHeaders()),
+                    },
                     body: JSON.stringify({
                         installId,
                         category: vote.category,
@@ -377,4 +418,139 @@ export default defineBackground(() => {
             }
         }
     };
+
+    async function getStoredAuth(): Promise<StoredAuth | null> {
+        const data = await browser.storage.local.get([STORAGE_KEYS.auth]);
+
+        return (data[STORAGE_KEYS.auth] as StoredAuth | undefined) ?? null;
+    };
+
+    async function authHeaders(): Promise<Record<string, string>> {
+        const auth = await getStoredAuth();
+
+        return auth ? { authorization: `Bearer ${auth.token}` } : {};
+    };
+
+    async function getAuthState(): Promise<ApiEnvelope<AuthState>> {
+        const auth = await getStoredAuth();
+
+        return {
+            ok: true,
+            data: {
+                signedIn: !!auth,
+                email: auth?.email ?? null,
+                userId: auth?.userId ?? null,
+            },
+        };
+    };
+
+    async function authRequestCode(email: string): Promise<ApiEnvelope> {
+        const response = await fetch(`${API_BASE}/api/auth/request-code`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email }),
+        });
+        const json = await response.json();
+
+        if (!response.ok || !json.ok)
+            throw new Error(json.error || "Could not send code.");
+
+        return {
+            ok: true,
+            data: json.data,
+        };
+    };
+
+    async function authVerifyCode(email: string, code: string): Promise<ApiEnvelope<AuthState>> {
+        const installId = await getInstallId();
+        const response = await fetch(`${API_BASE}/api/auth/verify-code`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ 
+                email,
+                code,
+                installId
+            }),
+        });
+        const json = await response.json();
+
+        if (!response.ok || !json.ok)
+            throw new Error(json.error || "Could not verify code.");
+
+        const { token, userId, email: verifiedEmail } = json.data;
+
+        await browser.storage.local.set({
+            [STORAGE_KEYS.auth]: {
+                token,
+                userId,
+                email: verifiedEmail,
+            },
+        });
+
+        await refreshServerHistory();
+
+        return {
+            ok: true,
+            data: {
+                signedIn: true,
+                email: verifiedEmail,
+                userId,
+            },
+        };
+    };
+
+    async function authSignOut(): Promise<ApiEnvelope> {
+        await browser.storage.local.remove(STORAGE_KEYS.auth);
+
+        return { ok: true };
+    };
+
+    async function refreshServerHistory(): Promise<void> {
+        const auth = await getStoredAuth();
+
+        if (!auth)
+            return;
+
+        const response = await fetch(`${API_BASE}/api/votes`, {
+            method: "GET",
+            headers: {...(await authHeaders()) },
+        });
+
+        if (response.status===401) {
+            await browser.storage.local.remove(STORAGE_KEYS.auth);
+
+            return;
+        }
+
+        if (!response.ok)
+            return;
+
+        const json = await response.json();
+        const serverVotes: VoteRecord[] = (json?.data?.votes ?? []).map((v: any) => ({
+            contentId: v.contentId,
+            category: v.category,
+            platform: v.platform ?? "web",
+            title: v.title ?? "",
+            url: v.url ?? "",
+            votedAt: v.votedAt ?? new Date().toISOString(),
+            synced: true,
+        }));
+        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
+        const local = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
+        const byContent = new Map<string, VoteRecord>();
+
+        for (const v of [...serverVotes, ...local]) {
+            const existing = byContent.get(v.contentId);
+
+            if (!existing || v.votedAt>existing.votedAt)
+                byContent.set(v.contentId, v);
+        }
+
+        const merged = [...byContent.values()].sort((a, b) => (b.votedAt>a.votedAt ? 1 : -1));
+
+        if (merged.length>50)
+            merged.length = 50;
+
+        await browser.storage.local.set({ [STORAGE_KEYS.votes]: merged });
+    }
 });

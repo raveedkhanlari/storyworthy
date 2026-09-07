@@ -30,7 +30,11 @@ export type ExtensionMessage =
     | { type: "SW_SAVE_PROFILE"; payload: UserProfile }
     | { type: "SW_OPEN_SIDEPANEL" }
     | { type: "SW_GET_VOTE_HISTORY" }
-    | { type: "SW_GET_VOTE_FOR_CONTENT"; payload: { contentId: string } };
+    | { type: "SW_GET_VOTE_FOR_CONTENT"; payload: { contentId: string } }
+    | { type: "SW_GET_AUTH_STATE" }
+    | { type: "SW_AUTH_REQUEST_CODE"; payload: { email: string } }
+    | { type: "SW_AUTH_VERIFY_CODE"; payload: { email: string; code: string }}
+    | { type: "SW_AUTH_SIGN_OUT" };
 
 export type VoteRecord = {
     contentId: string;
@@ -72,4 +76,10 @@ export type PanelController = {
     startIdleTimer: () => void;
     cancelIdleTimer: () => void;
     closeAfterResponse: () => void;
+};
+
+export type AuthState = {
+    signedIn: boolean;
+    email: string | null;
+    userId: string | null;
 };

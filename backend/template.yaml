@@ -2,6 +2,15 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: StoryWorthy backend - content init,voting, and user profiles
 
+Parameters:
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: HMAC secret used to sign session JWTs
+  SesSender:
+    Type: String
+    Description: Verified SES "From" address, e.g. no-reply@storyworthy.app
+
 Globals:
   Function:
     Runtime: nodejs22.x
@@ -14,6 +23,9 @@ Globals:
         USERS_TABLE: !Ref UsersTable
         CONTENT_TABLE: !Ref ContentTable
         VOTES_TABLE: !Ref VotesTable
+        AUTH_TABLE: !Ref AuthTable
+        JWT_SECRET: !Ref JwtSecret
+        SES_SENDER: !Ref SesSender
 
 Resources:
   # --- DynamoDB Tables --- #
@@ -48,11 +60,40 @@ Resources:
           AttributeType: S
         - AttributeName: installId
           AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
       KeySchema:
         - AttributeName: contentId
           KeyType: HASH
         - AttributeName: installId
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: byUser
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: contentId
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  AuthTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   # --- Lambda Functions --- #
   ContentInitFunction:
@@ -105,6 +146,61 @@ Resources:
             Path: /api/users/bootstrap
             Method: POST
 
+  AuthRequestCodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth-request-code.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthTable
+        - Statement:
+            - Effect: Allow
+              Action: 
+                - ses:SendEmail
+              Resource: "*"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/auth/request-code
+            Method: POST
+
+  AuthVerifyCodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth-verify-code.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/auth/verify-code
+            Method: POST
+
+  VotesListFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: votes-list.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/votes
+            Method: GET
+
   # --- HTTP API with CORS --- #
   StoryWorthyApi:
     Type: AWS::Serverless::HttpApi
@@ -114,7 +210,9 @@ Resources:
           - "*"
         AllowHeaders:
           - "content-type"
+          - "authorization"
         AllowMethods:
+          - GET
           - POST
           - OPTIONS
 
