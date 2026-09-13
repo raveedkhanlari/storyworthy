@@ -18,6 +18,7 @@ export const TABLES = {
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 const SES_SENDER = process.env.SES_SENDER!;
+const EMAIL_CONFIG_SET = process.env.EMAIL_CONFIG_SET;
 
 export function ok(data: unknown): APIGatewayProxyResultV2 {
     return {
@@ -164,6 +165,7 @@ export async function sendOtpEmail(toEmail: string, code: string): Promise<void>
     await ses.send(new SendEmailCommand({
         Source: SES_SENDER,
         Destination: { ToAddresses: [toEmail] },
+        ConfigurationSetName: EMAIL_CONFIG_SET,
         Message: {
             Subject: { Data: "Your StoryWorthy sign-in code" },
             Body: {

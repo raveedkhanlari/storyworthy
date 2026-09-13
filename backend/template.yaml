@@ -26,6 +26,7 @@ Globals:
         AUTH_TABLE: !Ref AuthTable
         JWT_SECRET: !Ref JwtSecret
         SES_SENDER: !Ref SesSender
+        EMAIL_CONFIG_SET: !Ref EmailConfigSet
 
 Resources:
   # --- DynamoDB Tables --- #
@@ -215,6 +216,37 @@ Resources:
           - GET
           - POST
           - OPTIONS
+
+  # --- Bounce/Complaint monitoring ---#
+  EmailEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: StoryWorthy SES bounce/complaint alerts
+
+  EmailEventsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref EmailEventsTopic
+      Protocol: email
+      Endpoint: raveed.khanlari@gmail.com
+
+  EmailConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: storyworthy-email-events
+
+  EmailConfigSetEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref EmailConfigSet
+      EventDestination:
+        Name: bounce-and-complaints
+        Enabled: true
+        MatchingEventTypes:
+          - BOUNCE
+          - COMPLAINT
+        SnsDestination:
+          TopicARN: !Ref EmailEventsTopic
 
 Outputs:
   ApiUrl:
