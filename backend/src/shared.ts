@@ -1,6 +1,7 @@
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import type { APIGatewayProxyResultV2, APIGatewayProxyEventV2 } from "aws-lambda";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 
@@ -8,6 +9,7 @@ const client = new DynamoDBClient({});
 export const ddb = DynamoDBDocumentClient.from(client);
 
 const ses = new SESClient({});
+const bedrock = new BedrockRuntimeClient({});
 
 export const TABLES = {
     users: process.env.USERS_TABLE!,
@@ -19,6 +21,10 @@ export const TABLES = {
 const JWT_SECRET = process.env.JWT_SECRET!;
 const SES_SENDER = process.env.SES_SENDER!;
 const EMAIL_CONFIG_SET = process.env.EMAIL_CONFIG_SET;
+const ADVICE_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+// --- Free-trial quota --//
+export const FREE_REVIEW_LIMIT = 15;
 
 export function ok(data: unknown): APIGatewayProxyResultV2 {
     return {
@@ -177,6 +183,85 @@ export async function sendOtpEmail(toEmail: string, code: string): Promise<void>
                         `<p>It expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
                 },
             },
+        },
+    }));
+};
+
+// --- Calls Claude on Bedrock with a system + user prompt, returns text reply. --- //
+export async function askClaude(system: string, usercontent: string, maxTokens = 700): Promise<string> {
+    const body = {
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: maxTokens,
+        temperature: 0.7,
+        system,
+        messages: [
+            {
+                role: "user",
+                content: [{ type: "text", text: usercontent }],
+            },
+        ],
+    };
+
+    const response = await bedrock.send(new InvokeModelCommand({
+        modelId: ADVICE_MODEL_ID,
+        contentType: "application/json",
+        accept: "application/json",
+        body: JSON.stringify(body)
+    }));
+
+    const decoded = JSON.parse(new TextDecoder().decode(response.body));
+
+    const text = Array.isArray(decoded?.content)
+        ? decoded.content.filter((b: any) => b.type==="text").map((b: any) => b.text).join("\n").trim()
+        : ""
+    ;
+
+    return text;
+};
+
+function userKey(email: string) {
+    return { 
+        pk: `USER#${email}`,
+        sk: `USER#${email}`,
+    };
+};
+
+// --- Reads how many advice reviews a user has consumed. --- //
+export async function getReviewsUsed(email: string): Promise<number> {
+    const res = await ddb.send(new GetCommand({
+        TableName: TABLES.auth,
+        Key: userKey(email),
+    }));
+
+    const used = res.Item?.reviewsUsed;
+    return typeof used==="number" ? used : 0;
+};
+
+// --- Automatically increment review counter and return new total. --- //
+export async function incrementReviewsUsed(email: string): Promise<number> {
+    const res = await ddb.send(new UpdateCommand({
+        TableName: TABLES.auth,
+        Key: userKey(email),
+        UpdateExpression: "SET reviewsUsed = if_not_exists(reviewsUsed, :z) + :one",
+        ExpressionAttributeValues: { 
+            ":z": 0,
+            ":one": 1
+        },
+        ReturnValues: "UPDATED_NEW",
+    }));
+
+    return (res.Attributes?.reviewsUsed as number) ?? 0;
+};
+
+// --- Mark a user as interested in paid tier ("notify me"/waitlist signal) --- //
+export async function markInterestedInPaid(email: string): Promise<void> {
+    await ddb.send(new UpdateCommand({
+        TableName: TABLES.auth,
+        Key: userKey(email),
+        UpdateExpression: "SET interestedInPAid = :t, interestedAt = :now",
+        ExpressionAttributeValues: {
+            ":t": true,
+            ":now": new Date().toISOString(),
         },
     }));
 };

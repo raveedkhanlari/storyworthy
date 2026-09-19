@@ -22,7 +22,20 @@ const authCancelBtn = document.querySelector<HTMLButtonElement>("#auth-cancel");
 const authSignOutBtn = document.querySelector<HTMLButtonElement>("#auth-signout");
 const profileSection = document.querySelector<HTMLElement>("#profile-section");
 const profilePrompt = document.querySelector<HTMLDivElement>("#profile-prompt");
+const adviceModal = document.querySelector<HTMLDivElement>("#advice-modal");
+const adviceClose = document.querySelector<HTMLButtonElement>("#advice-close");
+const adviceContext = document.querySelector<HTMLDivElement>("#advice-context");
+const adviceParagraph = document.querySelector<HTMLTextAreaElement>("#advice-paragraph");
+const adviceWordcount = document.querySelector<HTMLDivElement>("#advice-wordcount");
+const adviceSubmit = document.querySelector<HTMLButtonElement>("#advice-submit");
+const adviceStatus = document.querySelector<HTMLDivElement>("#advice-status");
+const adviceResult = document.querySelector<HTMLDivElement>("#advice-result");
+const advicePaywall = document.querySelector<HTMLDivElement>("#advice-paywall");
+const adviceWaitlistBtn = document.querySelector<HTMLButtonElement>("#advice-waitlist");
+const adviceWaitlistStatus = document.querySelector<HTMLDivElement>("#advice-waitlist-status");
 
+const MAX_ADVICE_WORDS = 80;
+let activeAdviceVote: VoteRecord | null = null;
 let pendingAuthEmail: string | null = null;
 let currentAuth: AuthState = { signedIn: false, email: null, userId: null };
 let hasProfile = false;
@@ -165,6 +178,17 @@ profileForm?.addEventListener("submit", async (event) => {
     renderProfile(profile);
     setStatus(profileStatus, "Profile saved.", "success");
     updateProfileVisibility();
+});
+
+adviceParagraph?.addEventListener("input", updateWordCount);
+adviceSubmit?.addEventListener("click", submitAdvice);
+adviceClose?.addEventListener("click", closeAdviceModal);
+adviceWaitlistBtn?.addEventListener("click", joinWaitlist);
+
+// Click outise box closes modal
+adviceModal?.addEventListener("click", (event) => {
+    if (event.target===adviceModal)
+        closeAdviceModal();
 });
 
 window.addEventListener("online", updateOnlineStatus);
@@ -340,6 +364,7 @@ async function loadVoteHistory() {
         type: "SW_GET_VOTE_HISTORY",
     });
 
+    // Empty-error state: show empty message, hide list.
     if (!response?.ok || !response.data?.votes?.length) {
         if (historyEmpty) {
             historyEmpty.hidden = false;
@@ -347,23 +372,48 @@ async function loadVoteHistory() {
 
         if (historyList) {
             historyList.hidden = true;
+            historyList.innerHTML = "";
         }
 
         return;
     }
 
-    if (historyEmpty) {
+    // Wire each Get Advice button (only when signed in).
+    const votes = response.data.votes as VoteRecord[];
+
+    if (historyEmpty)
         historyEmpty.hidden = true;
-    }
 
     if (historyList) {
         historyList.hidden = false;
-        historyList.innerHTML = response.data.votes.map((vote: VoteRecord) => `
+        historyList.innerHTML = votes.map((vote: VoteRecord, i: number) => `
             <div class="meta-item">
-                <div class="meta-label">${vote.platform} . ${vote.category}</div>
-                <div><a href="${vote.url}" target="_blank">${escapeHtml(vote.title)}</a></div>
+                <div class="meta-label">
+                    ${vote.platform} . ${vote.category}
+                </div>
+                <div>
+                    <a href="${vote.url}" target="_blank">
+                        ${escapeHtml(vote.title)}
+                    </a>
+                </div>
+                <button 
+                    class="sw-advice-btn" 
+                    data-vote-index="${i}"
+                >
+                    Get Advice
+                </button>
             </div>
-        `).join("");   
+        `).join("");
+
+        historyList?.querySelectorAll<HTMLButtonElement>(".sw-advice-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const idx = Number(btn.dataset.voteIndex);
+                const vote = votes[idx];
+
+                if (vote)
+                    openAdviceModal(vote);
+            });
+        });
     }
 };
 
@@ -379,4 +429,146 @@ function updateOnlineStatus() {
     if (offlineBanner) {
         offlineBanner.style.display = navigator.onLine ? "none" : "block";
     }
+};
+
+function openAdviceModal(vote: VoteRecord) {
+    //--- Advice is a signed-in feature ---//
+    if (!currentAuth.signedIn) {
+        setStatus(authStatus, "Sign in to get story coaching.", "error");
+
+        return;
+    }
+
+    activeAdviceVote = vote;
+
+    if (adviceContext)
+        adviceContext.textContent = `${vote.platform} . ${vote.category} - ${vote.title}`;
+
+    if (adviceParagraph)
+        adviceParagraph.value = "";
+
+    updateWordCount();
+    setStatus(adviceStatus, "", "default");
+
+    if (adviceResult) {
+        adviceResult.hidden = true;
+        adviceResult.textContent = "";
+    }
+
+    if (advicePaywall)
+        advicePaywall.hidden = true;
+
+    if (adviceSubmit) {
+        adviceSubmit.hidden = false;
+        adviceSubmit.disabled = false;
+    }
+
+    if (adviceModal)
+        adviceModal.hidden = false;
+
+    adviceParagraph?.focus();
+};
+
+function closeAdviceModal() {
+    if (adviceModal)
+        adviceModal.hidden = true;
+
+    activeAdviceVote = null;
+};
+
+function countWords(text: string): number {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+};
+
+function updateWordCount() {
+    const n = adviceParagraph ? countWords(adviceParagraph.value) : 0;
+
+    if (adviceWordcount) {
+        adviceWordcount.textContent = `${n} / ${MAX_ADVICE_WORDS} words`;
+        adviceWordcount.style.color = (n>MAX_ADVICE_WORDS) ? "var(--danger)" : "var(--muted)";
+    }
+};
+
+async function submitAdvice() {
+    if (!activeAdviceVote || !adviceParagraph)
+        return;
+
+    const paragraph = adviceParagraph.value.trim();
+
+    if (!paragraph) {
+        setStatus(adviceStatus, "Write your opening paragraph first.", "error");
+
+        return;
+    }
+
+    if (countWords(paragraph)>MAX_ADVICE_WORDS) {
+        setStatus(adviceStatus, `Please keepit under ${MAX_ADVICE_WORDS} words.`, "error");
+
+        return;
+    }
+
+    if (adviceSubmit)
+        adviceSubmit.disabled = true;
+
+    setStatus(adviceStatus, "Getting advice...", "notice");
+
+    if (adviceResult)
+        adviceResult.hidden = true;
+
+    const response = await browser.runtime.sendMessage({
+        type: "SW_GET_ADVICE",
+        payload: {
+            contentId: activeAdviceVote.contentId,
+            genre: activeAdviceVote.category,
+            paragraph,
+            postTitle: activeAdviceVote.title,
+            postContent: activeAdviceVote.postContent ?? "",
+        },
+    });
+
+    if (adviceSubmit)
+        adviceSubmit.disabled = false;
+
+    //--- Free trial exhausted -> show paywall ---//
+    if (!response?.ok && response?.error==="FREE_LIMIT_REACHED") {
+        setStatus(adviceStatus, "", "default");
+
+        if (adviceSubmit)
+            adviceSubmit.hidden = true;
+
+        if (advicePaywall)
+            advicePaywall.hidden = false;
+
+        return;
+    }
+
+    if (!response?.ok) {
+        setStatus(adviceStatus, response?.error || "Could not get advice.", "error");
+
+        return;
+    }
+
+    setStatus(adviceStatus, `Advice ready. ${response.data.reviewsRemaining} free reviews left.`, "notice");
+
+    if (adviceResult) {
+        adviceResult.textContent = response.data.advice;
+        adviceResult.hidden = false;
+    }
+};
+
+async function joinWaitlist() {
+    setStatus(adviceWaitlistStatus, "Adding you...", "notice");
+
+    const response = await browser.runtime.sendMessage({ type: "SW_JOIN_WAITLIST" });
+
+    if (!response?.ok) {
+        setStatus(adviceWaitlistStatus, response?.error || "Could not add you.", "error");
+
+        return;
+    }
+
+    setStatus(adviceWaitlistStatus, "You're on the list - we'll email you at launch.", "success");
+
+    if (adviceWaitlistBtn)
+        adviceWaitlistBtn.disabled = true;
 };

@@ -3,7 +3,7 @@ import { defineConfig } from "wxt";
 export default defineConfig({
     manifest: {
         name: "StoryWorthy",
-        version: "0.2.0",
+        version: "0.3.0",
         description: "Vote on what kind of story a post or content could become.",
         permissions: [
             "storage",

@@ -215,6 +215,86 @@
             a {
                 color: var(--accent);
             }
+
+            .advice-modal {
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.6);
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+                padding: 16px;
+                overflow-y: auto;
+                z-index: 1000;
+            }
+
+            .advice-modal[hidden] {
+                display: none;
+            }
+
+            .advice-box {
+                max-width: 100%;
+                width: 100%;
+                margin-top: 8px;
+            }
+
+            .advice-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+
+            .advice-close {
+                background: transparent;
+                color: var(--muted);
+                font-size: 22px;
+                line-height: 1;
+                padding: 0 6px;
+            }
+
+            textarea {
+                width: 100%;
+                border: 1px solid var(--broder);
+                border-radius: 10px;
+                background: var(--panel-2);
+                color: var(--text);
+                padding: 10px 12px;
+                outline: none;
+                resize: vertical;
+                font: inherit;
+            }
+
+            textarea:focus {
+                border-color: var(--accent);
+            }
+
+            #advice-section .btn-primary, .advice-box .btn-primary {
+                background: #f5c518;
+                color: #0d9668;
+            }
+
+            .advice-result {
+                white-space: pre-wrap;
+                background: var(--panel-2);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 12px;
+                margin-top: 10px;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+
+            .sw-advice-btn {
+                margin-top: 8px;
+                font-size: 12px;
+                padding: 6px 10px;
+                background: #f5c518;
+                color: #0d9668;
+                border: 0;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+            }
         </style>
     </head>
     <body>
@@ -447,6 +527,73 @@
                 >
                 </div>
             </section>
+            <!-- Advice modal (hidden until "Get Advice" is clicked) -->
+             <div
+                id="advice-modal"
+                class="advice-modal"
+                hidden
+             >
+                <div class="advice-box card">
+                    <div class="advice-header">
+                        <h2
+                            class="section-title"
+                            id="advice-title"
+                        >
+                            Get story advice
+                        </h2>
+                        <button
+                            type="button"
+                            class="advice-close"
+                            id="advice-close"
+                            aria-label="Close"
+                        >
+                            &times;
+                        </button>
+                    </div>
+                    <div class="muted" id="advice-context"></div>
+                    <div class="field">
+                        <label for="advice-paragraph">Your opening paragraph (max 80 words)</label>
+                        <textarea id="advice-paragraph" rows="4" placeholder="Write your first paragraph here..."></textarea>
+                        <div 
+                            class="muted"
+                            id="advice-wordcount"
+                        >
+                            0 / 80 words
+                        </div>
+                    </div>
+                    <div class="button-row">
+                        <button
+                            type="button"
+                            class="btn-primary"
+                            id="advice-submit"
+                        >
+                            Get advice
+                        </button>
+                    </div>
+                    <div class="status notice" id="advice-status" aria-live="polite"></div>
+                    <div class="advice-result" id="advice-result" hidden></div>
+                    <!-- Paywall (shown when free trial is exausted) -->
+                    <div
+                        class="advice-paywall"
+                        id="advice-paywall"
+                        hidden
+                    >
+                        <p class="muted">
+                            You've used all your free coaching reviews. A subscription with unlimited coaching and full story writing is coming soon.
+                        </p>
+                        <div class="button-row">
+                            <button
+                                type="button"
+                                class="btn-primary"
+                                id="advice-waitlist"
+                            >
+                                Notify me when it launches
+                            </button>
+                        </div>
+                        <div class="status notice" id="advice-waitlist-status" aria-live="polite"></div>
+                    </div>
+                </div>
+             </div>
         </main>
         <script
             type="module"

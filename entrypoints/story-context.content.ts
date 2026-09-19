@@ -156,6 +156,18 @@ function findWebArticle(): DetectedPost[] {
     }];
 };
 
+function extractPostText(element: HTMLElement, platform: SupportedPlatform): string {
+    let source: HTMLElement | null = element;
+
+    // For web articles, `element` is the h1 - climb to the article/body for full text.
+    if (platform==="web")
+        source = element.closest("article") ?? document.querySelector("article") ?? document.body;
+
+    const text = source?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+
+    return text.slice(0, 4000);
+};
+
 function injectInlineWidget(postElement: HTMLElement, context: PostContext, large = false) {
     const autoCloseMs = large ? 7000 : 4000;
     const widget = document.createElement("div");
@@ -194,7 +206,9 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
         } else {
             panelOpen = true;
 
-            showVotePanel(widget, context, {
+            const postContent = extractPostText(postElement, context.platform);
+
+            showVotePanel(widget, context, postContent, {
                 startIdleTimer: () => {
                     panelTimer = setTimeout(closePanel, autoCloseMs);
                 },
@@ -214,7 +228,7 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
     postElement.appendChild(widget);
 };
 
-async function showVotePanel(widget: HTMLElement, context: PostContext, controller: PanelController) {
+async function showVotePanel(widget: HTMLElement, context: PostContext, postContent: string, controller: PanelController) {
     const panel = document.createElement("div");
 
     panel.className = "sw-inline-panel";
@@ -280,6 +294,7 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, controll
                     contentId: initResponse.data.contentId,
                     category,
                     page: context,
+                    postContent,
                 },
             });
 

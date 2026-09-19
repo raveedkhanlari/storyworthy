@@ -9,6 +9,7 @@ import type {
     ApiEnvelope,
     VoteRecord,
     AuthState,
+    AdvicePayload,
 } from "@/utils/types";
 
 const STORAGE_KEYS = {
@@ -97,6 +98,22 @@ export default defineBackground(() => {
                     return true;
             case "SW_AUTH_SIGN_OUT":
                 authSignOut()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_GET_ADVICE":
+                getAdvice(message.payload)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_JOIN_WAITLIST":
+                joinWaitList()
                     .then(sendResponse)
                     .catch((error: Error) => sendResponse({
                         ok: false,
@@ -255,6 +272,7 @@ export default defineBackground(() => {
             url: payload.page.canonicalUrl,
             votedAt: new Date().toISOString(),
             synced: false,
+            postContent: payload.postContent,
         };
 
         // Always save locally first
@@ -552,5 +570,61 @@ export default defineBackground(() => {
             merged.length = 50;
 
         await browser.storage.local.set({ [STORAGE_KEYS.votes]: merged });
-    }
+    };
+
+    async function getAdvice(payload: AdvicePayload): Promise<ApiEnvelope> {
+        const response = await fetch(`${API_BASE}/api/story/advise`, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...(await authHeaders()) },
+            body: JSON.stringify({
+                genre: payload.genre,
+                paragraph: payload.paragraph,
+                postTitle: payload.postTitle,
+                postContent: payload.postContent,
+            }),
+        });
+
+        const json = await response.json();
+
+        // Paywall signal: trial exhausted.
+        if (response.status===402)
+            return {
+                ok: false,
+                error: "FREE_LIMIT_REACHED",
+            };
+        
+        if (!response.ok || !json.ok)
+            return {
+                ok: false,
+                error: json.error || "Could not get advice.",
+            };
+
+        return {
+            ok: true,
+            data: json.data,
+        };
+    };
+
+    async function joinWaitList(): Promise<ApiEnvelope> {
+        const response = await fetch(`${API_BASE}/api/story/waitlist`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                ...(await authHeaders()),
+            },
+        });
+
+        const json = await response.json();
+
+        if (!response.ok || !json.ok)
+            return {
+                ok: false,
+                error: json.error || "Could not join the waitlist.",
+            };
+
+        return {
+            ok: true,
+            data: json.data,
+        };
+    };
 });

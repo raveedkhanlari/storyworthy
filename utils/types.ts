@@ -14,6 +14,7 @@ export type SubmitVotePayload = {
     contentId: string;
     category: string;
     page: InitPagePayload;
+    postContent?: string;
 };
 
 export type UserProfile = {
@@ -23,19 +24,6 @@ export type UserProfile = {
     emailOptIn?: boolean;
 };
 
-export type ExtensionMessage =
-    | { type: "SW_GET_INSTALL_CONTEXT" }
-    | { type: "SW_INIT_PAGE"; payload: InitPagePayload }
-    | { type: "SW_SUBMIT_VOTE"; payload: SubmitVotePayload }
-    | { type: "SW_SAVE_PROFILE"; payload: UserProfile }
-    | { type: "SW_OPEN_SIDEPANEL" }
-    | { type: "SW_GET_VOTE_HISTORY" }
-    | { type: "SW_GET_VOTE_FOR_CONTENT"; payload: { contentId: string } }
-    | { type: "SW_GET_AUTH_STATE" }
-    | { type: "SW_AUTH_REQUEST_CODE"; payload: { email: string } }
-    | { type: "SW_AUTH_VERIFY_CODE"; payload: { email: string; code: string }}
-    | { type: "SW_AUTH_SIGN_OUT" };
-
 export type VoteRecord = {
     contentId: string;
     category: string;
@@ -44,6 +32,7 @@ export type VoteRecord = {
     url: string;
     votedAt: string;
     synced: boolean;
+    postContent?: string;
 };
 
 export type ApiEnvelope<T = unknown> = {
@@ -83,3 +72,27 @@ export type AuthState = {
     email: string | null;
     userId: string | null;
 };
+
+export type AdvicePayload = {
+    contentId: string;
+    genre: string;
+    paragraph: string;
+    postTitle: string;
+    postContent: string;
+};
+
+export type ExtensionMessage =
+    | { type: "SW_GET_INSTALL_CONTEXT" }
+    | { type: "SW_INIT_PAGE"; payload: InitPagePayload }
+    | { type: "SW_SUBMIT_VOTE"; payload: SubmitVotePayload }
+    | { type: "SW_SAVE_PROFILE"; payload: UserProfile }
+    | { type: "SW_OPEN_SIDEPANEL" }
+    | { type: "SW_GET_VOTE_HISTORY" }
+    | { type: "SW_GET_VOTE_FOR_CONTENT"; payload: { contentId: string } }
+    | { type: "SW_GET_AUTH_STATE" }
+    | { type: "SW_AUTH_REQUEST_CODE"; payload: { email: string } }
+    | { type: "SW_AUTH_VERIFY_CODE"; payload: { email: string; code: string }}
+    | { type: "SW_AUTH_SIGN_OUT" }
+    | { type: "SW_GET_ADVICE"; payload: AdvicePayload }
+    | { type: "SW_JOIN_WAITLIST" }
+;

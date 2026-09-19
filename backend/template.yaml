@@ -202,6 +202,44 @@ Resources:
             Path: /api/votes
             Method: GET
 
+  StoryAdviseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: story-advise.handler
+      CodeUri: dist/
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/story/advise
+            Method: POST
+
+  StoryWaitListFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: story-waitlist.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/story/waitlist
+            Method: POST
+
   # --- HTTP API with CORS --- #
   StoryWorthyApi:
     Type: AWS::Serverless::HttpApi
