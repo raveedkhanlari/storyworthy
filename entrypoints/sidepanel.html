@@ -25,6 +25,10 @@
                 box-sizing: border-box;
             }
 
+            [hidden] {
+                display: none !important;
+            }
+
             html,
             body {
                 margin: 0;
@@ -295,6 +299,127 @@
                 cursor: pointer;
                 font-weight: 600;
             }
+
+            .collapse-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                width: 100%;
+                background: transparent;
+                border: 0;
+                padding: 0;
+                margin: 0 0 12px;
+                cursor: pointer;
+                color: var(--text);
+            }
+
+            .collapse-header .section-title {
+                margin: 0;
+            }
+
+            .collapse-caret {
+                color: var(--muted);
+                transition: transform 0.15s ease;
+            }
+
+            .collapse-header[aria-expanded="false"] .collapse-caret {
+                transform: rotate(-90deg);
+            }
+
+            .sw-vote-actions {
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            .sw-vote-actions .sw-advice-btn,
+            .sw-vote-actions .sw-delete-btn {
+                flex: 1;
+                margin-top: 0;
+            }
+
+            .sw-delete-btn {
+                font-size: 12px;
+                padding: 6px 10px;
+                background: var(--panel-2);
+                color: var(--danger);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+            }
+
+            .sw-delete-btn:hover {
+                border-color: var(--danger);
+            }
+
+            .sw-confirm-text {
+                flex: 1;
+                align-self: center;
+                font-size: 12px;
+                color: var(--danger);
+                font-weight: 600;
+            }
+
+            .sw-confirm-yes,
+            .sw-confirm-no {
+                font-size: 12px;
+                padding: 6px 10px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+                border: 1px solid var(--border);
+            }
+
+            .sw-confirm-yes {
+                background: var(--danger);
+                color: #fff;
+                border: 0;
+            }
+
+            .sw-confirm-no {
+                background: var(--panel-2);
+                color: var(--text);
+            }
+
+            .sw-deleting {
+                flex: 1;
+                align-self: center;
+                font-size: 12px;
+                color: var(--danger);
+                font-weight: 600;
+            }
+
+            .sw-dots {
+                display: inline-block;
+                margin-left: 2px;
+            }
+
+            .sw-dots span {
+                display: inline-block;
+                opacity: 0.35;
+                font-weight: 800;
+                animation: sw-dot-bounce 0.9s infinite ease-in-out;
+            }
+
+            .sw-dots span:nth-child(2) {
+                animation-delay: 0.15s;
+            }
+
+            .sw-dots span:nth-child(3) {
+                animation-delay: 0.3s;
+            }
+
+            @keyframes sw-dot-bounce {
+                0%, 100% { 
+                    opacity: 0,2;
+                    transform: translateY(0); 
+                }
+                40% { 
+                    opacity: 1;
+                    transform: translateY(-3px); 
+                }
+            }
         </style>
     </head>
     <body>
@@ -339,9 +464,13 @@
                     id="auth-email-form"
                     class="stack"
                 >
-                    <div class="field">
+                    <!-- Signedout: email input -->
+                     <div
+                        class="field"
+                        id="auth-email-field"
+                    >
                         <label for="auth-email">
-                            Email<span id="auth-email-tag" class="label-tag" hidden> (signed in)</span>
+                            Email
                         </label>
                         <input
                             id="auth-email"
@@ -351,14 +480,25 @@
                             autocomplete="email"
                             required
                         />
-                    </div>
+                     </div>
+                     <!-- Signed-in: read-only email line -->
+                      <div
+                        class="field"
+                        id="auth-signedin-field"
+                        hidden
+                      >
+                        <div class="meta-label">
+                            <span class="label-tag">(signed in)</span>
+                        </div>
+                        <div id="auth-email-display"></div>
+                      </div>
                     <div class="button-row">
                         <button
                             type="submit"
                             class="btn-primary"
                             id="auth-send-btn"
                         >
-                            Send sign-in code
+                            Sign In
                         </button>
                         <button
                             type="button"
@@ -393,14 +533,7 @@
                             type="submit"
                             class="btn-primary"
                         >
-                            Verify &amp; sign in
-                        </button>
-                        <button
-                            type="button"
-                            class="btn-secondary"
-                            id="auth-cancel"
-                        >
-                            &larr; Change email
+                            Verify
                         </button>
                     </div>
                  </form>
@@ -509,22 +642,33 @@
                 class="card"
                 id="history-section"
             >
-                <h2
-                    class="section-title"
+                <button
+                    type="button"
+                    class="collapse-header"
+                    id="history-toggle"
+                    aria-expanded="true"
                 >
-                    Recent Votes
-                </h2>
-                <div
-                    id="history-empty"
-                    class="empty"
-                >
-                    No votes yet. Find something storyworthy!
-                </div>
-                <div
-                    id="history-list"
-                    class="meta-list"
-                    hidden
-                >
+                    <span class="section-title">Recent Votes</span>
+                    <span
+                        class="collapse-caret"
+                        id="history-caret"
+                    >
+                        ▾
+                    </span>
+                </button>
+                <div id="history-body">
+                    <div
+                        id="history-empty"
+                        class="empty"
+                    >
+                        No votes yet. Find something storyworthy!
+                    </div>
+                    <div
+                        id="history-list"
+                        class="meta-list"
+                        hidden
+                    >
+                    </div>
                 </div>
             </section>
             <!-- Advice modal (hidden until "Get Advice" is clicked) -->

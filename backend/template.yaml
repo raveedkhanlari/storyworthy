@@ -240,6 +240,22 @@ Resources:
             Path: /api/story/waitlist
             Method: POST
 
+  VotesDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: votes-delete.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VotesTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/votes/delete
+            Method: POST
+
   # --- HTTP API with CORS --- #
   StoryWorthyApi:
     Type: AWS::Serverless::HttpApi

@@ -120,6 +120,30 @@ export default defineBackground(() => {
                         error: error.message,
                     }));
                 return true;
+            case "SW_CLEAR_LOCAL_DATA":
+                clearLocalData()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_OPEN_LINK":
+                openLink(message.payload.url)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error:error.message,
+                    }));
+                return true;
+            case "SW_DELETE_VOTE":
+                deleteVote(message.payload.contentId)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message
+                    }));
+                return true;
             default:
                 return false;
         };        
@@ -586,6 +610,13 @@ export default defineBackground(() => {
 
         const json = await response.json();
 
+        // Token is expired (30-day expiry is elapsed).
+        if (response.status===401)
+            return {
+                ok: false,
+                error: "AUTH_EXPIRED",
+            };
+
         // Paywall signal: trial exhausted.
         if (response.status===402)
             return {
@@ -625,6 +656,64 @@ export default defineBackground(() => {
         return {
             ok: true,
             data: json.data,
+        };
+    };
+
+    async function clearLocalData(): Promise<ApiEnvelope> {
+        await browser.storage.local.remove([STORAGE_KEYS.votes]);
+
+        return { ok: true };
+    };
+
+    async function openLink(url: string): Promise<ApiEnvelope> {
+        const [activeTab] = await browser.tabs.query({
+            active: true,
+            currentWindow: true,
+        });
+
+        if (activeTab?.id)
+            await browser.tabs.update(activeTab.id, { url });
+
+        return { ok: true };
+    };
+
+    async function deleteVote(contentId: string): Promise<ApiEnvelope> {
+        // Remove from backend (only if signed in); deletes across account.
+        const auth = await getStoredAuth();
+
+        if (auth) {
+            const response = await fetch(`${API_BASE}/api/votes/delete`, {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    ...(await authHeaders()),
+                },
+                body: JSON.stringify({ contentId }),
+            });
+
+            if (response.status===401)
+                return {
+                    ok: false,
+                    error: "AUTH_EXPIRED"
+                };
+            
+            if (!response.ok)
+                return {
+                    ok: false,
+                    error: "Could not delete vote.",
+                };
+        }
+
+        // Remove from local history regardless.
+        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
+        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
+        const filtered = votes.filter(v => v.contentId!==contentId);
+
+        await browser.storage.local.set({ [STORAGE_KEYS.votes]: filtered });
+
+        return {
+            ok: true,
+            data: { contentId },
         };
     };
 });

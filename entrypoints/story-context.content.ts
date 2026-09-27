@@ -230,6 +230,7 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
 
 async function showVotePanel(widget: HTMLElement, context: PostContext, postContent: string, controller: PanelController) {
     const panel = document.createElement("div");
+    (widget as any)._swPanel = panel;
 
     panel.className = "sw-inline-panel";
     panel.innerHTML = `
@@ -272,7 +273,7 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, postCont
 
             if (!category) 
                 return;
-
+            
             controller.cancelIdleTimer();
             status.textContent = "Submitting...";
 
@@ -302,6 +303,9 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, postCont
                 buttons.forEach(b => b.classList.remove("sw-selected"));
                 btn.classList.add("sw-selected");
                 status.textContent = `Voted: ${category}`;
+
+                // Open side panel while we still have user gesture (user's click)
+                browser.runtime.sendMessage({ type: "SW_OPEN_SIDEPANEL" });
             } else {
                 status.textContent = "Vote failed.";
             }
@@ -310,16 +314,66 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, postCont
         });
     });
 
-    widget.appendChild(panel);
+    // Append widget to <body> with fixed positioning so no ancestor overflow/shadow clipt it.
+    panel.style.position = "fixed";
+    panel.style.zIndex = "2147483647"; // max, above site UI
+    
+    document.body.appendChild(panel);
+    positionPanel(widget, panel);
+
+    // Keep panel anchored to widget while it's open.
+    const reposition = () => positionPanel(widget, panel);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+
+    // Store cleanup on panel so removePanel can detach listeners.
+    (panel as any)._swReposition = reposition;
 
     controller.startIdleTimer();
 };
 
-function removePanel(widget: HTMLElement) {
-    const panel = widget.querySelector(".sw-inline-panel");
+function positionPanel(widget: HTMLElement, panel: HTMLElement) {
+    const r = widget.getBoundingClientRect();
+    const panelWidth = 220;
+    const margin = 6;
 
-    if (panel)
-        panel.remove();
+    // Prefer aligning panels right edge to widget's right edge.
+    let left = r.right - panelWidth;
+
+    if (left<8)
+        left =8; // Don't run off left edge
+
+    let top = r.bottom + margin;
+
+    // If it would overflow bottom, place it above widget instead.
+    const panelHeight = panel.offsetHeight || 200;
+
+    if ((top + panelHeight)>(window.innerHeight - 8)) {
+        top = r.top - panelHeight - margin;
+
+        if (top<8)
+            top =8;
+    }
+
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+};
+
+function removePanel(widget: HTMLElement) {
+    // Panel now lives on document.body; find one anchored to this widget. 
+    const panel = (widget as any)._swPanel as HTMLElement | undefined;
+
+    if (panel) {
+        const reposition = (panel as any)._swReposition;
+
+        if (reposition) {
+            window.removeEventListener("scroll", reposition, true);
+            window.removeEventListener("resize", reposition);
+        }
+
+                panel.remove();
+                (widget as any)._swPanel = undefined;
+    }
 };
 
 function detectPlatform(): SupportedPlatform | null {

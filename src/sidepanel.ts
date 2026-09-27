@@ -15,10 +15,11 @@ const authEmailForm = document.querySelector<HTMLFormElement>("#auth-email-form"
 const authCodeForm = document.querySelector<HTMLFormElement>("#auth-code-form");
 const authEmailInput = document.querySelector<HTMLInputElement>("#auth-email");
 const authCodeInput = document.querySelector<HTMLInputElement>("#auth-code");
-const authEmailTag = document.querySelector<HTMLSpanElement>("#auth-email-tag");
+const authEmailField = document.querySelector<HTMLDivElement>("#auth-email-field");
+const authSignedInField = document.querySelector<HTMLDivElement>("#auth-signedin-field");
+const authEmailDisplay = document.querySelector<HTMLDivElement>("#auth-email-display");
 const authSendBtn = document.querySelector<HTMLButtonElement>("#auth-send-btn");
 const authStatus = document.querySelector<HTMLDivElement>("#auth-status");
-const authCancelBtn = document.querySelector<HTMLButtonElement>("#auth-cancel");
 const authSignOutBtn = document.querySelector<HTMLButtonElement>("#auth-signout");
 const profileSection = document.querySelector<HTMLElement>("#profile-section");
 const profilePrompt = document.querySelector<HTMLDivElement>("#profile-prompt");
@@ -33,8 +34,14 @@ const adviceResult = document.querySelector<HTMLDivElement>("#advice-result");
 const advicePaywall = document.querySelector<HTMLDivElement>("#advice-paywall");
 const adviceWaitlistBtn = document.querySelector<HTMLButtonElement>("#advice-waitlist");
 const adviceWaitlistStatus = document.querySelector<HTMLDivElement>("#advice-waitlist-status");
+const historyToggle = document.querySelector<HTMLButtonElement>("#history-toggle");
+const historyBody = document.querySelector<HTMLDivElement>("#history-body");
+const historySection = document.querySelector<HTMLElement>("#history-section");
 
+const PROFILE_ENABLED = false; // Profile is deferred to paid tier. Keep code but hide it in freemium tier.
 const MAX_ADVICE_WORDS = 80;
+const INACTIVITY_MS = 60 * 60 * 1000;
+let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 let activeAdviceVote: VoteRecord | null = null;
 let pendingAuthEmail: string | null = null;
 let currentAuth: AuthState = { signedIn: false, email: null, userId: null };
@@ -117,27 +124,12 @@ authCodeForm?.addEventListener("submit", async (event) => {
             authCodeInput.value = "";
 
     renderAuth(response.data as AuthState);
-    setStatus(authStatus, "Signed in. Your vote history is synced.", "notice");
     await loadVoteHistory();
-});
-
-authCancelBtn?.addEventListener("click", () => {
-    pendingAuthEmail = null;
-
-    if (authCodeForm)
-            authCodeForm.hidden = true;
-
-    if (authEmailForm)
-            authEmailForm.hidden = false;
-
-    if (authCodeInput)
-        authCodeInput.value = "";
-
-    setStatus(authStatus, "", "default");
 });
 
 authSignOutBtn?.addEventListener("click", async () => {
     await browser.runtime.sendMessage({ type: "SW_AUTH_SIGN_OUT" });
+    await browser.runtime.sendMessage({ type: "SW_CLEAR_LOCAL_DATA" });
 
     if (authEmailInput)
         authEmailInput.value = "";
@@ -191,6 +183,16 @@ adviceModal?.addEventListener("click", (event) => {
         closeAdviceModal();
 });
 
+historyToggle?.addEventListener("click", () => {
+    const expanded = historyToggle.getAttribute("aria-expanded")!=="false";
+    const next = !expanded;
+
+    historyToggle.setAttribute("aria-expanded", String(next));
+
+    if (historyBody)
+        historyBody.hidden = !next;
+});
+
 window.addEventListener("online", updateOnlineStatus);
 window.addEventListener("offline", updateOnlineStatus);
 updateOnlineStatus();
@@ -206,6 +208,11 @@ browser.storage.onChanged.addListener((changes) => {
     if (changes.sw_votes) {
         loadVoteHistory();
     }
+});
+
+// Any interaction in panel counts as activity.
+["click", "keydown", "input", "mousemove"].forEach((evt) => {
+    document.addEventListener(evt, resetInactivityTimer, { passive: true });
 });
 
 async function init() {
@@ -224,36 +231,56 @@ async function loadAuthState() {
 function renderAuth(state: AuthState) {
     currentAuth = state;
 
+    // Start/stop inactivity timer based on session state.
+    resetInactivityTimer();
+
     const signedIn = state.signedIn;
 
-    // Email field: shows the account email (read-only) when signed in.
-    if (authEmailInput) {
-        authEmailInput.disabled = signedIn;
-
-        if (signedIn)
-            authEmailInput.value = state.email ?? "";
-    }
-
-    // "(signed in)" tag next to the Email label.
-    if (authEmailTag)
-        authEmailTag.hidden = !signedIn;
-
-    // Swap Send-code button for Sign-out when signed in.
+    // Signed-out: show email input + Send button.Signed-in: hide them.
+    if (authEmailField)
+        authEmailField.hidden = signedIn;
     if (authSendBtn)
         authSendBtn.hidden = signedIn;
 
+    // Signed-in: show read-only email line + Sign out.
+    if (authSignedInField)
+        authSignedInField.hidden = !signedIn;
     if (authSignOutBtn)
         authSignOutBtn.hidden = !signedIn;
+    if (signedIn && authEmailDisplay)
+        authEmailDisplay.textContent = state.email ?? "";
 
-    // Code step is only shown mid-flow (never on load).
+    // Status line under Account header reflects session.
+    if (signedIn) {
+        setStatus(authStatus, `Signed in as "${state.email ?? ''}". Your vote history is synced.`, "notice");
+    } else {
+        setStatus(authStatus, "", "default");
+    }
+
+    // Code-entry form only appears mid sign-in flow, never in a resting state.
     if (authCodeForm)
         authCodeForm.hidden = true;
+
+    // Vote history is private—only show it when signed in.
+    if (historySection)
+        historySection.hidden = !signedIn;
 
     updateProfileVisibility();
 };
 
-// Profile shows when signed out, or when signed in but no profile saved yet.
 function updateProfileVisibility() {
+    if (!PROFILE_ENABLED) {
+        if (profileSection)
+            profileSection.hidden = true;
+
+        if (profilePrompt) {
+            profilePrompt.hidden = true;
+            profilePrompt.textContent = "";
+        }
+
+        return;
+    }
+
     const show = !currentAuth.signedIn || !hasProfile;
 
     if (profileSection)
@@ -392,19 +419,28 @@ async function loadVoteHistory() {
                     ${vote.platform} . ${vote.category}
                 </div>
                 <div>
-                    <a href="${vote.url}" target="_blank">
+                    <a href="#" class="sw-post-link" data-vote-index="${i}">
                         ${escapeHtml(vote.title)}
                     </a>
                 </div>
-                <button 
-                    class="sw-advice-btn" 
-                    data-vote-index="${i}"
-                >
-                    Get Advice
-                </button>
+                <div class="sw-vote-actions">
+                    <button 
+                        class="sw-advice-btn" 
+                        data-vote-index="${i}"
+                    >
+                        Get Advice
+                    </button>
+                    <button
+                        class="sw-delete-btn"
+                        data-vote-index="${i}"
+                    >
+                        Delete Vote
+                    </button>
+                </div>
             </div>
         `).join("");
 
+        // Get Advice button -> Open coaching modal
         historyList?.querySelectorAll<HTMLButtonElement>(".sw-advice-btn").forEach(btn => {
             btn.addEventListener("click", () => {
                 const idx = Number(btn.dataset.voteIndex);
@@ -412,6 +448,67 @@ async function loadVoteHistory() {
 
                 if (vote)
                     openAdviceModal(vote);
+            });
+        });
+
+        // Delete Vote button -> Confirm and delete from backend + local, then re-render.
+        historyList?.querySelectorAll<HTMLButtonElement>(".sw-delete-btn").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const idx = Number(btn.dataset.voteIndex);
+                const vote = votes[idx];
+
+                if (!vote)
+                    return;
+
+                const actions = btn.closest<HTMLDivElement>(".sw-vote-actions");
+
+                if (!actions)
+                    return;
+
+                actions.innerHTML = `
+                    <span class="sw-confirm-text">Delete?</span>
+                    <button class="sw-confirm-yes">Yes</button>
+                    <button class="sw-confirm-no">Cancel</button>
+                `;
+
+                // Cancel -> just -rerender list (restore original buttons and listeners).
+                actions.querySelector<HTMLButtonElement>(".sw-confirm-no")?.addEventListener("click", () => { loadVoteHistory(); }); 
+                
+                // Yes -> show "Deleting..." animation, then re-render.
+                actions.querySelector<HTMLButtonElement>(".sw-confirm-yes")?.addEventListener("click", async () => {
+                    actions.innerHTML = `
+                        <span class="sw-deleting">Deleting<span class="sw-dots"><span>.</span><span>.</span><span>.</span></span></span>
+                    `;
+                    
+                    const response = await browser.runtime.sendMessage({
+                        type: "SW_DELETE_VOTE",
+                        payload: { contentId: vote.contentId },
+                    });
+
+                    if (response?.ok) {
+                        // Re-render without deleted vote
+                        await loadVoteHistory();
+                    } else if (response?.error=="AUTH_EXPIRED") {
+                        await forceSignOut("Your session has expired. Please sign in again.");
+                    } else {
+                        btn.disabled = false;
+                    }
+                });
+            });
+        });
+
+        historyList?.querySelectorAll<HTMLAnchorElement>(".sw-post-link").forEach(link => {
+            link.addEventListener("click", (e) => {
+                e.preventDefault();
+
+                const idx = Number(link.dataset.voteIndex);
+                const vote = votes[idx];
+
+                if (vote?.url)
+                    browser.runtime.sendMessage({
+                        type: "SW_OPEN_LINK",
+                        payload: { url: vote.url },
+                    });
             });
         });
     }
@@ -529,7 +626,13 @@ async function submitAdvice() {
     if (adviceSubmit)
         adviceSubmit.disabled = false;
 
-    //--- Free trial exhausted -> show paywall ---//
+    if (!response?.ok && response?.error==="AUTH_EXPIRED") {
+        await forceSignOut("Your session expired. Please sign in again.");
+
+        return;
+    }
+
+    // Free trial exhausted -> show paywall
     if (!response?.ok && response?.error==="FREE_LIMIT_REACHED") {
         setStatus(adviceStatus, "", "default");
 
@@ -571,4 +674,40 @@ async function joinWaitlist() {
 
     if (adviceWaitlistBtn)
         adviceWaitlistBtn.disabled = true;
+};
+
+async function forceSignOut(reason: string) {
+    await browser.runtime.sendMessage({ type: "SW_AUTH_SIGN_OUT" });
+    await browser.runtime.sendMessage({ type: "SW_CLEAR_LOCAL_DATA" });
+
+    clearInactivityTimer();
+    renderAuth({
+        signedIn: false,
+        email: null,
+        userId: null,
+    });
+    setStatus(authStatus, reason, "notice");
+};
+
+function clearInactivityTimer() {
+    if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+
+        inactivityTimer = null;
+    }
+};
+
+function resetInactivityTimer() {
+    // Only track inactivity while signed in.
+    if (!currentAuth.signedIn) {
+        clearInactivityTimer();
+
+        return;
+    }
+
+    clearInactivityTimer();
+
+    inactivityTimer = setTimeout(() => {
+        forceSignOut("Signed out after 1 hour of inactivity. Sign in to resume your story.");
+    }, INACTIVITY_MS);
 };
