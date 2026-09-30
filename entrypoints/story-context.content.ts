@@ -172,7 +172,7 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
     const autoCloseMs = large ? 7000 : 4000;
     const widget = document.createElement("div");
 
-    widget.className = large ? "sw-inline-widget sw-inline-widget-large" : "sw-inline-widget";
+    widget.className = large ? "sw-inline-widget sw-inline-widget-large sw-inline-widget-web" : "sw-inline-widget";
     widget.setAttribute("role", "button");
     widget.setAttribute("aria-label", `Vote on: ${context.title.slice(0, 40)}`);
     widget.setAttribute("tabindex", "0");
@@ -393,13 +393,16 @@ function detectPlatform(): SupportedPlatform | null {
 };
 
 function isArticlePage(): boolean {
-    if (articlePageCache!==null) {
-        return articlePageCache;
-    }
+    // Only cache a positive verdict. While it's not an article (e.g. a JS-rendered page that hasn't injected its metadata), keep -rechecking on later scans.
+    if (articlePageCache===true)
+        return true;
 
-    articlePageCache = computeIsArticlePage();
+    const result = computeIsArticlePage();
 
-    return articlePageCache;
+    if (result)
+        articlePageCache = true;
+
+    return result;
 };
 
 function computeIsArticlePage(): boolean {

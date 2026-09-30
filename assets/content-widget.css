@@ -36,6 +36,12 @@
     font-size: 18px;
 }
 
+.sw-inline-widget-web {
+    top: 0;
+    left: -52px;
+    right: auto;
+}
+
 .sw-inline-panel {
     margin-top: 6px;
     padding: 12px;
