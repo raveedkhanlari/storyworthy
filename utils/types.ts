@@ -74,11 +74,27 @@ export type AuthState = {
 };
 
 export type AdvicePayload = {
-    contentId: string;
+    voteId: string;
     genre: string;
-    paragraph: string;
     postTitle: string;
     postContent: string;
+    paragraph: string;
+};
+
+export type StoryTurn = {
+    paragraph: string;
+    advice: string;
+};
+
+export type StoryThread = {
+    contentId: string;
+    genre: string;
+    postTitle: string;
+    postContent: string;
+    ownerUserId: string; // userId this story belongs to
+    turns: StoryTurn[];
+    createdAt: string;
+    updatedAt: string;
 };
 
 export type ExtensionMessage =
@@ -98,4 +114,8 @@ export type ExtensionMessage =
     | { type: "SW_CLEAR_LOCAL_DATA"; }
     | { type: "SW_OPEN_LINK"; payload: { url: string; }; }
     | { type: "SW_DELETE_VOTE"; payload: { contentId: string; }; }
+    | { type: "SW_GET_STORY"; }
+    | { type: "SW_SAVE_STORY"; payload: StoryThread; }
+    | { type: "SW_CLEAR_STORY"; }
+    | { type: "SW_GET_SERVER_STORY"; }
 ;

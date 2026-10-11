@@ -19,7 +19,7 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
         return fail("Invalid JSON");
     }
 
-    const { installId, category, page } = payload;
+    const { installId, category, page, postContent } = payload;
 
     if (!installId || !category)
         return fail("Missing installId or category");
@@ -38,6 +38,7 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
             platform: page?.platform ?? null,
             title: page?.title ?? null,
             url: page?.canonicalUrl ?? page?.url ?? null,
+            postContent: typeof postContent==="string" ? postContent.slice(0, 4000) : null,
             votedAt: new Date().toISOString(),
         },
     }));

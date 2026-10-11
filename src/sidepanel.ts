@@ -1,5 +1,5 @@
 import { browser } from "wxt/browser";
-import type { UserProfile, InstallContextResponse, VoteRecord, AuthState } from "@/utils/types";
+import type { UserProfile, InstallContextResponse, VoteRecord, AuthState, StoryThread } from "@/utils/types";
 
 const profileForm = document.querySelector<HTMLFormElement>("#profile-form");
 const profileStatus = document.querySelector<HTMLDivElement>("#profile-status");
@@ -20,6 +20,7 @@ const authSignedInField = document.querySelector<HTMLDivElement>("#auth-signedin
 const authEmailDisplay = document.querySelector<HTMLDivElement>("#auth-email-display");
 const authSendBtn = document.querySelector<HTMLButtonElement>("#auth-send-btn");
 const authStatus = document.querySelector<HTMLDivElement>("#auth-status");
+const authSignOutRow = document.querySelector<HTMLDivElement>("#auth-signout-row");
 const authSignOutBtn = document.querySelector<HTMLButtonElement>("#auth-signout");
 const profileSection = document.querySelector<HTMLElement>("#profile-section");
 const profilePrompt = document.querySelector<HTMLDivElement>("#profile-prompt");
@@ -37,15 +38,27 @@ const adviceWaitlistStatus = document.querySelector<HTMLDivElement>("#advice-wai
 const historyToggle = document.querySelector<HTMLButtonElement>("#history-toggle");
 const historyBody = document.querySelector<HTMLDivElement>("#history-body");
 const historySection = document.querySelector<HTMLElement>("#history-section");
+const adviceConfirm = document.querySelector<HTMLDivElement>("#advice-confirm");
+const adviceConfirmText = document.querySelector<HTMLParagraphElement>("#advice-confirm-text");
+const adviceConfirmStart = document.querySelector<HTMLButtonElement>("#advice-confirm-start");
+const adviceConfirmCancel = document.querySelector<HTMLButtonElement>("#advice-confirm-cancel");
+const adviceInputArea = document.querySelector<HTMLDivElement>("#advice-input-area");
+const adviceParagraphLabel = document.querySelector<HTMLLabelElement>("#advice-paragraph-label");
 
 const PROFILE_ENABLED = false; // Profile is deferred to paid tier. Keep code but hide it in freemium tier.
 const MAX_ADVICE_WORDS = 80;
+const MAX_TURNS = 3;
 const INACTIVITY_MS = 60 * 60 * 1000;
-let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+const LAST_ACTIVE_KEY = "sw_last_active";
+let inactivityTimer: ReturnType<typeof setInterval> | null = null;
 let activeAdviceVote: VoteRecord | null = null;
 let pendingAuthEmail: string | null = null;
 let currentAuth: AuthState = { signedIn: false, email: null, userId: null };
 let hasProfile = false;
+let pendingStoryVote: VoteRecord | null = null;
+let activeStory: StoryThread | null = null; // Story current open in modal
+let currentStory: StoryThread | null = null; // User's single saved story
+let interestedInPaid = false;
 
 init().catch((error) => {
     setStatus(profileStatus, error instanceof Error ? error.message : "Failed to initialize.", "error");
@@ -124,12 +137,18 @@ authCodeForm?.addEventListener("submit", async (event) => {
             authCodeInput.value = "";
 
     renderAuth(response.data as AuthState);
+    await markActive();
+    await loadVoteHistory();
+    await loadStory();
     await loadVoteHistory();
 });
 
 authSignOutBtn?.addEventListener("click", async () => {
     await browser.runtime.sendMessage({ type: "SW_AUTH_SIGN_OUT" });
     await browser.runtime.sendMessage({ type: "SW_CLEAR_LOCAL_DATA" });
+    await browser.storage.local.remove(LAST_ACTIVE_KEY);
+
+    closeAdviceModal();
 
     if (authEmailInput)
         authEmailInput.value = "";
@@ -193,6 +212,35 @@ historyToggle?.addEventListener("click", () => {
         historyBody.hidden = !next;
 });
 
+adviceConfirmStart?.addEventListener("click", () => {
+    if (!pendingStoryVote)
+        return;
+
+    activeStory = {
+        contentId: pendingStoryVote.contentId,
+        genre: pendingStoryVote.category,
+        postTitle: pendingStoryVote.title,
+        postContent: pendingStoryVote.postContent ?? "",
+        ownerUserId: currentAuth.userId ?? "",
+        turns: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+
+    pendingStoryVote = null;
+
+    showAdviceInput();
+    renderAdviceModal();
+
+    adviceParagraph?.focus();
+});
+
+adviceConfirmCancel?.addEventListener("click", () => {
+    pendingStoryVote = null;
+
+    closeAdviceModal();
+});
+
 window.addEventListener("online", updateOnlineStatus);
 window.addEventListener("offline", updateOnlineStatus);
 updateOnlineStatus();
@@ -211,14 +259,17 @@ browser.storage.onChanged.addListener((changes) => {
 });
 
 // Any interaction in panel counts as activity.
-["click", "keydown", "input", "mousemove"].forEach((evt) => {
+["click", "keydown", "input"].forEach((evt) => {
     document.addEventListener(evt, resetInactivityTimer, { passive: true });
 });
 
 async function init() {
     await loadAuthState();
+    await enforceSessionFreshness();
     await loadInstallContext();
-    await loadVoteHistory();
+    await loadVoteHistory(); // This call loads votes into local storage
+    await loadStory();
+    await loadVoteHistory(); // This call refreshes votes based on coaching usage
 };
 
 async function loadAuthState() {
@@ -226,6 +277,19 @@ async function loadAuthState() {
 
     if (response?.ok && response.data)
         renderAuth(response.data as AuthState);
+};
+
+async function enforceSessionFreshness() {
+    if (!currentAuth.signedIn)
+        return;
+
+    const last = await getLastActive();
+
+    if (last && (Date.now() - last)>=INACTIVITY_MS) {
+        await forceSignOut("Signed out after inactivity. Please sign in again.");
+    } else {
+        resetInactivityTimer();
+    }
 };
 
 function renderAuth(state: AuthState) {
@@ -236,6 +300,9 @@ function renderAuth(state: AuthState) {
 
     const signedIn = state.signedIn;
 
+    if (authEmailForm)
+        authEmailForm.hidden = signedIn;
+
     // Signed-out: show email input + Send button.Signed-in: hide them.
     if (authEmailField)
         authEmailField.hidden = signedIn;
@@ -244,9 +311,9 @@ function renderAuth(state: AuthState) {
 
     // Signed-in: show read-only email line + Sign out.
     if (authSignedInField)
-        authSignedInField.hidden = !signedIn;
-    if (authSignOutBtn)
-        authSignOutBtn.hidden = !signedIn;
+        authSignedInField.hidden = true;
+    if (authSignOutRow)
+        authSignOutRow.hidden = !signedIn;
     if (signedIn && authEmailDisplay)
         authEmailDisplay.textContent = state.email ?? "";
 
@@ -327,6 +394,17 @@ function readProfileForm(): UserProfile {
         email: emailInput?.value.trim() || "",
         emailOptIn: !!emailOptInInput?.checked,
     };
+};
+
+async function markActive() {
+    await browser.storage.local.set({ [LAST_ACTIVE_KEY]: Date.now() });
+};
+
+async function getLastActive(): Promise<number> {
+    const data = await browser.storage.local.get([LAST_ACTIVE_KEY]);
+    const v = data[LAST_ACTIVE_KEY];
+
+    return typeof v==="number" ? v : 0;
 };
 
 function fillProfileForm(profile: UserProfile) {
@@ -426,7 +504,7 @@ async function loadVoteHistory() {
                 <div class="sw-vote-actions">
                     <button 
                         class="sw-advice-btn" 
-                        data-vote-index="${i}"
+                        data-vote-index="${i}"${currentStory && currentStory.contentId!==vote.contentId ? " disabled" : ""}
                     >
                         Get Advice
                     </button>
@@ -443,6 +521,9 @@ async function loadVoteHistory() {
         // Get Advice button -> Open coaching modal
         historyList?.querySelectorAll<HTMLButtonElement>(".sw-advice-btn").forEach(btn => {
             btn.addEventListener("click", () => {
+                if (btn.disabled)
+                    return;
+
                 const idx = Number(btn.dataset.voteIndex);
                 const vote = votes[idx];
 
@@ -514,6 +595,120 @@ async function loadVoteHistory() {
     }
 };
 
+async function loadStory() {
+    currentStory = null;
+
+    if (!currentAuth.signedIn)
+        return;
+
+    const serverResp = await browser.runtime.sendMessage({
+        type: "SW_GET_SERVER_STORY",
+    });
+
+    if (serverResp?.error==="AUTH_EXPIRED") {
+        await forceSignOut("Your session expired. Please sign in again.");
+
+        return;
+    }
+
+    if (!serverResp?.ok || !serverResp.data?.story) {
+        currentStory = null;
+
+        return;
+    }
+
+    const s = serverResp.data.story;
+    const vote = await findVoteByContentId(s.voteId);
+
+    interestedInPaid = serverResp.data?.interestedInPaid===true;
+    currentStory = {
+        contentId: s.voteId,
+        genre: vote?.category ?? "",
+        postTitle: vote?.title ?? "",
+        postContent: vote?.postContent ?? "",
+        ownerUserId: currentAuth.userId ?? "",
+        turns: s.turns.map((t: any) => ({
+            paragraph: t.paragraph,
+            advice: t.advice,
+        })),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+
+    await browser.runtime.sendMessage({
+        type: "SW_SAVE_STORY",
+        payload: currentStory,
+    });
+}
+
+async function findVoteByContentId(contentId: string): Promise<VoteRecord | null> {
+    const resp = await browser.runtime.sendMessage({
+        type: "SW_GET_VOTE_HISTORY",
+    });
+    const votes = (resp?.ok ? resp.data?.votes : []) as VoteRecord[] | undefined;
+
+    return votes?.find(v => v.contentId===contentId) ?? null;
+}
+
+function renderMarkdown(md: string): string {
+    // 1. Escape everything so model ouput can't inject HTML.
+    const esc = escapeHtml(md);
+    // 2. Inline bold: **text** -> <strong>text</strong>
+    const PILLARS = /^(persona|scene|tone|narration|time)$/i;
+    let html = esc.replace(/\*\*([^*]+)\*\*/g, (_m, inner: string) => 
+        PILLARS.test(inner.trim())
+            ? `<strong class="sw-pillar">${inner}</strong>`
+            : `<strong>${inner}</strong>`
+    );
+    // 3. Inline italics: *text* -> <em> (safety net; model is told to avoid these)
+    html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    // 4. Build lines; group consecutive bullet lines (- or *) into <ul>.
+    const lines = html.split(/\r?\n/);
+    const out: string[] = [];
+    let inList = false;
+
+    const closeList = () => {
+        if (inList) {
+            out.push("</ul>");
+
+            inList = false;
+        }
+    };
+
+    for (const raw of lines) {
+        const line = raw.trim();
+
+        if (!line)
+            continue;
+
+        const heading = line.match(/^#{2,3}\s+(.*)$/);
+
+        if (heading) {
+            closeList();
+            out.push(`<div class="sw-advice-heading">${heading[1]}</div>`);
+            continue;
+        }
+
+        const bullet = line.match(/^[-*]\s+(.*)$/);
+
+        if (bullet) {
+            if (!inList) {
+                out.push("<ul>");
+                inList = true;
+            }
+
+            out.push(`<li>${bullet[1]}</li>`);
+        } else {
+            closeList();
+            out.push(`<p>${line}</p>`);
+        }
+    }
+
+    closeList();
+
+    return out.join("");
+};
+
 function escapeHtml(text: string): string {
     const div = document.createElement("div");
 
@@ -529,48 +724,153 @@ function updateOnlineStatus() {
 };
 
 function openAdviceModal(vote: VoteRecord) {
-    //--- Advice is a signed-in feature ---//
+    // Advice is a signed-in feature.
     if (!currentAuth.signedIn) {
         setStatus(authStatus, "Sign in to get story coaching.", "error");
 
         return;
     }
 
-    activeAdviceVote = vote;
-
-    if (adviceContext)
-        adviceContext.textContent = `${vote.platform} . ${vote.category} - ${vote.title}`;
-
-    if (adviceParagraph)
-        adviceParagraph.value = "";
-
-    updateWordCount();
-    setStatus(adviceStatus, "", "default");
-
-    if (adviceResult) {
-        adviceResult.hidden = true;
-        adviceResult.textContent = "";
-    }
-
-    if (advicePaywall)
-        advicePaywall.hidden = true;
-
-    if (adviceSubmit) {
-        adviceSubmit.hidden = false;
-        adviceSubmit.disabled = false;
-    }
-
     if (adviceModal)
         adviceModal.hidden = false;
 
-    adviceParagraph?.focus();
+    // If a story exists for this vote, resume it.
+    if (currentStory && currentStory.contentId===vote.contentId) {
+        activeStory = currentStory;
+
+        showAdviceInput();
+        renderAdviceModal();
+
+        return;
+    }
+
+    // New story -> show inline confirmation first.
+    pendingStoryVote = vote;
+
+    if (adviceContext)
+        adviceContext.hidden = true;
+
+    if (adviceConfirmText)
+        adviceConfirmText.innerHTML = `Develop your free story from "<span class="sw-title">${escapeHtml(vote.title)}</span>"? You get 3 coaching rounds. On the free plan, you can develop only one story, and the post can't be changed once you begin.`;
+
+    if (adviceConfirm)
+        adviceConfirm.hidden = false;
+
+    if (adviceInputArea)
+        adviceInputArea.hidden = true;
+
+    if (adviceResult)
+        adviceResult.hidden = true;
+
+    setStatus(adviceStatus, "", "default");
+}
+
+function showAdviceInput() {
+    if (adviceConfirm)
+        adviceConfirm.hidden = true;
+
+    if (adviceInputArea)
+        adviceInputArea.hidden = false;
+
+    if (adviceContext)
+        adviceContext.hidden = false;
+}
+
+function renderAdviceModal() {
+    if (!activeStory)
+        return;
+
+    showAdviceInput();
+
+    const usedTurns = activeStory.turns.length;
+    const atLimit = usedTurns>=MAX_TURNS;
+
+    if (adviceParagraphLabel)
+        adviceParagraphLabel.textContent = usedTurns===0
+            ? "Your opening paragraph (max 80 words)"
+            : `Paragraph ${usedTurns + 1} of 3 (max 80 words)`
+        ;
+
+    if (adviceParagraph)
+        adviceParagraph.placeholder = usedTurns===0
+            ? "Write your opening paragraph here..."
+            : "Continue your story here..."
+        ;
+
+    if (adviceContext)
+        adviceContext.innerHTML = `<span class="sw-title">${escapeHtml(activeStory.postTitle)}</span>`;
+
+    // Render conversation so far (paragraph + advice).
+    if (adviceResult) {
+        if (usedTurns>0) {
+            adviceResult.innerHTML = activeStory.turns.map((t, i) => `
+                <div class="sw-turn">
+                    <div class="sw-turn-label">Your paragraph ${i + 1}</div>
+                    <div class="sw-turn-para">${escapeHtml(t.paragraph)}</div>
+                    <div class="sw-turn-advice">${renderMarkdown(t.advice)}</div>
+                </div>
+            `).join("");
+            adviceResult.hidden = false;
+        } else {
+            adviceResult.hidden = true;
+            adviceResult.innerHTML = "";
+        }
+    }
+
+    // Input + submit vs. paywall.
+    if (atLimit) {
+        if (adviceInputArea)
+            adviceInputArea.hidden = true;
+
+        if (advicePaywall)
+            advicePaywall.hidden = false;
+
+        if (interestedInPaid) {
+            if (adviceWaitlistBtn)
+                adviceWaitlistBtn.hidden = true;
+
+            setStatus(adviceWaitlistStatus, "You 're on the list - we'll email you at launch.", "success");
+        } else {
+            if (adviceWaitlistBtn)
+                adviceWaitlistBtn.hidden = false;
+
+            setStatus(adviceWaitlistStatus, "", "default");
+        }
+
+        setStatus(adviceStatus, "You've used all your free coaching rounds for this story.", "notice");
+    } else {
+        if (adviceInputArea)
+            adviceInputArea.hidden = false;
+
+        if (adviceSubmit) {
+            adviceSubmit.hidden = false;
+            adviceSubmit.disabled = false;
+            adviceSubmit.textContent = usedTurns===0 ? "Get Advice" : "Continue Story";
+        }
+
+        if (advicePaywall)
+            advicePaywall.hidden = true;
+
+        if (adviceParagraph)
+            adviceParagraph.value = "";
+
+        updateWordCount();
+        setStatus(adviceStatus, usedTurns===0 ? "Write your opening paragraph (max 80 words)." : `Round ${usedTurns + 1} of 3 - continue your story (max 80 words).`, "notice");
+    }
 };
 
 function closeAdviceModal() {
     if (adviceModal)
         adviceModal.hidden = true;
 
-    activeAdviceVote = null;
+    if (adviceConfirm)
+        adviceConfirm.hidden = true;
+
+    if (adviceInputArea)
+        adviceInputArea.hidden = false;
+
+    activeStory = null;
+    pendingStoryVote = null;
 };
 
 function countWords(text: string): number {
@@ -587,13 +887,13 @@ function updateWordCount() {
 };
 
 async function submitAdvice() {
-    if (!activeAdviceVote || !adviceParagraph)
+    if (!activeStory || !adviceParagraph)
         return;
 
     const paragraph = adviceParagraph.value.trim();
 
     if (!paragraph) {
-        setStatus(adviceStatus, "Write your opening paragraph first.", "error");
+        setStatus(adviceStatus, "Write your paragraph first.", "error");
 
         return;
     }
@@ -609,38 +909,32 @@ async function submitAdvice() {
 
     setStatus(adviceStatus, "Getting advice...", "notice");
 
-    if (adviceResult)
-        adviceResult.hidden = true;
-
     const response = await browser.runtime.sendMessage({
         type: "SW_GET_ADVICE",
         payload: {
-            contentId: activeAdviceVote.contentId,
-            genre: activeAdviceVote.category,
+            voteId: activeStory.contentId,
+            genre: activeStory.genre,
+            postTitle: activeStory.postTitle,
+            postContent: activeStory.postContent,
             paragraph,
-            postTitle: activeAdviceVote.title,
-            postContent: activeAdviceVote.postContent ?? "",
         },
     });
 
     if (adviceSubmit)
         adviceSubmit.disabled = false;
 
-    if (!response?.ok && response?.error==="AUTH_EXPIRED") {
-        await forceSignOut("Your session expired. Please sign in again.");
-
-        return;
-    }
-
-    // Free trial exhausted -> show paywall
     if (!response?.ok && response?.error==="FREE_LIMIT_REACHED") {
-        setStatus(adviceStatus, "", "default");
-
         if (adviceSubmit)
             adviceSubmit.hidden = true;
 
         if (advicePaywall)
             advicePaywall.hidden = false;
+
+        return;
+    }
+
+    if (!response?.ok && response?.error==="AUTH_EXPIRED") {
+        await forceSignOut("Your session expired. Please sign in again.");
 
         return;
     }
@@ -651,12 +945,21 @@ async function submitAdvice() {
         return;
     }
 
-    setStatus(adviceStatus, `Advice ready. ${response.data.reviewsRemaining} free reviews left.`, "notice");
+    // Append turn, persist, re-render.
+    activeStory.turns.push({
+        paragraph,
+        advice: response.data.advice,
+    });
+    activeStory.updatedAt = new Date().toISOString();
+    currentStory = activeStory;
 
-    if (adviceResult) {
-        adviceResult.textContent = response.data.advice;
-        adviceResult.hidden = false;
-    }
+    await browser.runtime.sendMessage({ 
+        type: "SW_SAVE_STORY",
+        payload: activeStory,
+    });
+
+    renderAdviceModal();
+    loadVoteHistory();
 };
 
 async function joinWaitlist() {
@@ -670,6 +973,11 @@ async function joinWaitlist() {
         return;
     }
 
+    interestedInPaid = true;
+
+    if (adviceWaitlistBtn)
+        adviceWaitlistBtn.hidden = true;
+
     setStatus(adviceWaitlistStatus, "You're on the list - we'll email you at launch.", "success");
 
     if (adviceWaitlistBtn)
@@ -679,8 +987,10 @@ async function joinWaitlist() {
 async function forceSignOut(reason: string) {
     await browser.runtime.sendMessage({ type: "SW_AUTH_SIGN_OUT" });
     await browser.runtime.sendMessage({ type: "SW_CLEAR_LOCAL_DATA" });
+    await browser.storage.local.remove(LAST_ACTIVE_KEY);
 
     clearInactivityTimer();
+    closeAdviceModal();
     renderAuth({
         signedIn: false,
         email: null,
@@ -691,7 +1001,7 @@ async function forceSignOut(reason: string) {
 
 function clearInactivityTimer() {
     if (inactivityTimer) {
-        clearTimeout(inactivityTimer);
+        clearInterval(inactivityTimer);
 
         inactivityTimer = null;
     }
@@ -705,9 +1015,15 @@ function resetInactivityTimer() {
         return;
     }
 
-    clearInactivityTimer();
+    markActive();
 
-    inactivityTimer = setTimeout(() => {
-        forceSignOut("Signed out after 1 hour of inactivity. Sign in to resume your story.");
-    }, INACTIVITY_MS);
+    if (!inactivityTimer) {
+        // Poll every minute: if an hour has passed since last activity, sign out.
+        inactivityTimer = setInterval(async () => {
+            const last = await getLastActive();
+
+            if ((Date.now() - last)>=INACTIVITY_MS)
+                forceSignOut("Signed out after 1 hour of inactivity. Sign in to resume your story.");
+        }, 60 * 1000);
+    }
 };

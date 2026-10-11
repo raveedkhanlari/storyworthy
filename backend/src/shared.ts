@@ -1,30 +1,49 @@
-import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, PutCommand, UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import type { APIGatewayProxyResultV2, APIGatewayProxyEventV2 } from "aws-lambda";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 
 const client = new DynamoDBClient({});
-export const ddb = DynamoDBDocumentClient.from(client);
-
 const ses = new SESClient({});
 const bedrock = new BedrockRuntimeClient({});
+const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days;
+const JWT_SECRET = process.env.JWT_SECRET!;
+const SES_SENDER = process.env.SES_SENDER!;
+const EMAIL_CONFIG_SET = process.env.EMAIL_CONFIG_SET;
+const ADVICE_MODEL_ID = "us.anthropic.claude-sonnet-4-6";
 
+export const MAX_TURNS = 3;
+export const ddb = DynamoDBDocumentClient.from(client);
 export const TABLES = {
     users: process.env.USERS_TABLE!,
     content: process.env.CONTENT_TABLE!,
     votes: process.env.VOTES_TABLE!,
     auth: process.env.AUTH_TABLE!,
+    stories: process.env.STORIES_TABLE!,
 };
 
-const JWT_SECRET = process.env.JWT_SECRET!;
-const SES_SENDER = process.env.SES_SENDER!;
-const EMAIL_CONFIG_SET = process.env.EMAIL_CONFIG_SET;
-const ADVICE_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
-
-// --- Free-trial quota --//
-export const FREE_REVIEW_LIMIT = 15;
+// JWT (HS256)
+export type JwtClaims = {
+    sub: string; //userId
+    email: string;
+    iat: number;
+    exp: number;
+};
+export type ClaudeMessage = { 
+    role: "user" | "assistant"; 
+    text: string 
+};
+export type StoryTurnRow = {
+    userId: string;
+    voteTurn: string; // "<voteId>#<turn>"
+    voteId: string;
+    turn: number;
+    paragraph: string;
+    advice: string;
+    createdAt: string;
+};
 
 export function ok(data: unknown): APIGatewayProxyResultV2 {
     return {
@@ -41,34 +60,6 @@ export function fail(message: string, statusCode = 400): APIGatewayProxyResultV2
         body: JSON.stringify({ ok: false, error: message }),
     };
 };
-
-// --- base64url helpers --- //
-function b64url(input: Buffer | string): string {
-    return Buffer.from(input)
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-};
-
-function b64urlDecode(input: string): Buffer {
-    const pad = (input.length % 4)===0
-        ? ""
-        : "=".repeat(4 - (input.length % 4))
-    ;
-
-    return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
-};
-
-// --- JWT (HS256) --- //
-export type JwtClaims = {
-    sub: string; //userId
-    email: string;
-    iat: number;
-    exp: number;
-};
-
-const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 export function signJwt(claims: { sub: string, email: string }): string {
     const header = {
@@ -119,7 +110,7 @@ export function verifyJwt(token: string): JwtClaims | null {
     return claims;
 };
 
-// --- Pulls a bearer token from the request and returns its claims, or null. --- //
+// Pulls a bearer token from the request and returns its claims, or null.
 export function getAuth(event: APIGatewayProxyEventV2): JwtClaims | null {
     const header = 
         event.headers?.authorization ??
@@ -134,7 +125,6 @@ export function getAuth(event: APIGatewayProxyEventV2): JwtClaims | null {
     return verifyJwt(match[1]);
 };
 
-// --- OTP helpers --- //
 export function generateOtp(): string {
     // 6-digit numeric code, zero-padded
     const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
@@ -187,26 +177,27 @@ export async function sendOtpEmail(toEmail: string, code: string): Promise<void>
     }));
 };
 
-// --- Calls Claude on Bedrock with a system + user prompt, returns text reply. --- //
-export async function askClaude(system: string, usercontent: string, maxTokens = 700): Promise<string> {
+// Calls Claude on Bedrock with a system prompt and a conversation, returns text reply.
+export async function askClaude(system: string, messages: ClaudeMessage[], maxTokens = 900): Promise<string> {
     const body = {
         anthropic_version: "bedrock-2023-05-31",
         max_tokens: maxTokens,
         temperature: 0.7,
         system,
-        messages: [
-            {
-                role: "user",
-                content: [{ type: "text", text: usercontent }],
-            },
-        ],
+        messages: messages.map(m => ({
+            role: m.role,
+            content: [{
+                type: "text",
+                text: m.text,
+            }],
+        })),
     };
 
     const response = await bedrock.send(new InvokeModelCommand({
         modelId: ADVICE_MODEL_ID,
         contentType: "application/json",
         accept: "application/json",
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
     }));
 
     const decoded = JSON.parse(new TextDecoder().decode(response.body));
@@ -219,49 +210,65 @@ export async function askClaude(system: string, usercontent: string, maxTokens =
     return text;
 };
 
-function userKey(email: string) {
-    return { 
-        pk: `USER#${email}`,
-        sk: `USER#${email}`,
-    };
-};
-
-// --- Reads how many advice reviews a user has consumed. --- //
-export async function getReviewsUsed(email: string): Promise<number> {
-    const res = await ddb.send(new GetCommand({
-        TableName: TABLES.auth,
-        Key: userKey(email),
-    }));
-
-    const used = res.Item?.reviewsUsed;
-    return typeof used==="number" ? used : 0;
-};
-
-// --- Automatically increment review counter and return new total. --- //
-export async function incrementReviewsUsed(email: string): Promise<number> {
-    const res = await ddb.send(new UpdateCommand({
-        TableName: TABLES.auth,
-        Key: userKey(email),
-        UpdateExpression: "SET reviewsUsed = if_not_exists(reviewsUsed, :z) + :one",
-        ExpressionAttributeValues: { 
-            ":z": 0,
-            ":one": 1
-        },
-        ReturnValues: "UPDATED_NEW",
-    }));
-
-    return (res.Attributes?.reviewsUsed as number) ?? 0;
-};
-
-// --- Mark a user as interested in paid tier ("notify me"/waitlist signal) --- //
+// Mark a user as interested in paid tier ("notify me"/waitlist signal).
 export async function markInterestedInPaid(email: string): Promise<void> {
     await ddb.send(new UpdateCommand({
         TableName: TABLES.auth,
         Key: userKey(email),
-        UpdateExpression: "SET interestedInPAid = :t, interestedAt = :now",
+        UpdateExpression: "SET interestedInPaid = :t, interestedAt = :now",
         ExpressionAttributeValues: {
             ":t": true,
             ":now": new Date().toISOString(),
         },
     }));
+};
+
+export async function isInterestedInPaid(email: string): Promise<boolean> {
+    const res = await ddb.send(new GetCommand({
+        TableName: TABLES.auth,
+        Key: userKey(email),
+    }));
+
+    return res.Item?.interestedInPaid===true;
+}
+
+export async function getUserTurns(userId: string): Promise<StoryTurnRow[]> {
+    const res = await ddb.send(new QueryCommand({
+        TableName: TABLES.stories,
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": userId },
+    }));
+
+    return (res.Items ?? []) as StoryTurnRow[];
+}
+
+export async function saveStoryTurn(row: StoryTurnRow): Promise<void> {
+    await ddb.send(new PutCommand({
+        TableName: TABLES.stories,
+        Item: row,
+    }));
+}
+
+function b64url(input: Buffer | string): string {
+    return Buffer.from(input)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+};
+
+function b64urlDecode(input: string): Buffer {
+    const pad = (input.length % 4)===0
+        ? ""
+        : "=".repeat(4 - (input.length % 4))
+    ;
+
+    return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+};
+
+function userKey(email: string) {
+    return { 
+        pk: `USER#${email}`,
+        sk: `USER#${email}`,
+    };
 };

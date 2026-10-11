@@ -10,6 +10,7 @@ import type {
     VoteRecord,
     AuthState,
     AdvicePayload,
+    StoryThread,
 } from "@/utils/types";
 
 const STORAGE_KEYS = {
@@ -17,6 +18,7 @@ const STORAGE_KEYS = {
     profile: "sw_profile",
     votes: "sw_votes",
     auth: "sw_auth", // { token, userId, email }
+    story: "sw_story" // Single free-tier story thread
 } as const;
 
 export default defineBackground(() => {
@@ -142,6 +144,38 @@ export default defineBackground(() => {
                     .catch((error: Error) => sendResponse({
                         ok: false,
                         error: error.message
+                    }));
+                return true;
+            case "SW_GET_STORY":
+                getStory()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_SAVE_STORY":
+                saveStory(message.payload)
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_CLEAR_STORY":
+                clearStory()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
+                    }));
+                return true;
+            case "SW_GET_SERVER_STORY":
+                getServerStory()
+                    .then(sendResponse)
+                    .catch((error: Error) => sendResponse({
+                        ok: false,
+                        error: error.message,
                     }));
                 return true;
             default:
@@ -601,10 +635,11 @@ export default defineBackground(() => {
             method: "POST",
             headers: { "content-type": "application/json", ...(await authHeaders()) },
             body: JSON.stringify({
+                voteId: payload.voteId,
                 genre: payload.genre,
-                paragraph: payload.paragraph,
                 postTitle: payload.postTitle,
                 postContent: payload.postContent,
+                paragraph: payload.paragraph,
             }),
         });
 
@@ -623,6 +658,13 @@ export default defineBackground(() => {
                 ok: false,
                 error: "FREE_LIMIT_REACHED",
             };
+
+        // Freemium one-story-limit check
+        if (response.status===409)
+            return {
+                ok: false,
+                error: "ONE_STORY_ONLY"
+            };
         
         if (!response.ok || !json.ok)
             return {
@@ -635,6 +677,34 @@ export default defineBackground(() => {
             data: json.data,
         };
     };
+
+    async function getServerStory(): Promise<ApiEnvelope> {
+        const response = await fetch(`${API_BASE}/api/story`, {
+            method: "GET",
+            headers: {
+                ...(await authHeaders()),
+            },
+        });
+
+        if (response.status===401)
+            return {
+                ok: false,
+                error: "AUTH_EXPIRED",
+            };
+
+        const json = await response.json();
+
+        if (!response.ok || !json.ok)
+            return {
+                ok: false,
+                error: "Could not load sotry.",
+            };
+
+        return {
+            ok: true,
+            data: json.data,
+        };
+    }
 
     async function joinWaitList(): Promise<ApiEnvelope> {
         const response = await fetch(`${API_BASE}/api/story/waitlist`, {
@@ -715,5 +785,26 @@ export default defineBackground(() => {
             ok: true,
             data: { contentId },
         };
+    };
+
+    async function getStory(): Promise<ApiEnvelope<{ story: StoryThread | null }>> {
+        const data = await browser.storage.local.get([STORAGE_KEYS.story]);
+
+        return {
+            ok: true,
+            data: { story: data[STORAGE_KEYS.story] as StoryThread | undefined ?? null }
+        };
+    };
+
+    async function saveStory(story: StoryThread): Promise<ApiEnvelope> {
+        await browser.storage.local.set({ [STORAGE_KEYS.story]: story });
+
+        return { ok: true };
+    };
+
+    async function clearStory(): Promise<ApiEnvelope> {
+        await browser.storage.local.remove(STORAGE_KEYS.story);
+
+        return { ok: true };
     };
 });

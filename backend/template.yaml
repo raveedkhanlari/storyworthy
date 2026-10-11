@@ -24,6 +24,7 @@ Globals:
         CONTENT_TABLE: !Ref ContentTable
         VOTES_TABLE: !Ref VotesTable
         AUTH_TABLE: !Ref AuthTable
+        STORIES_TABLE: !Ref StoriesTable
         JWT_SECRET: !Ref JwtSecret
         SES_SENDER: !Ref SesSender
         EMAIL_CONFIG_SET: !Ref EmailConfigSet
@@ -95,6 +96,21 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
+
+  StoriesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: voteTurn
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: voteTurn
+          KeyType: RANGE
 
   # --- Lambda Functions --- #
   ContentInitFunction:
@@ -216,6 +232,13 @@ Resources:
               Action:
                 - bedrock:InvokeModel
               Resource: "*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StoriesTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
       Events:
         Api:
           Type: HttpApi
@@ -239,6 +262,24 @@ Resources:
             ApiId: !Ref StoryWorthyApi
             Path: /api/story/waitlist
             Method: POST
+  
+  StoryGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: story-get.handler
+      CodeUri: dist/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StoriesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuthTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref StoryWorthyApi
+            Path: /api/story
+            Method: GET
 
   VotesDeleteFunction:
     Type: AWS::Serverless::Function
