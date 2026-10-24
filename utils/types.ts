@@ -91,6 +91,7 @@ export type StoryThread = {
     genre: string;
     postTitle: string;
     postContent: string;
+    summary: string;
     ownerUserId: string; // userId this story belongs to
     turns: StoryTurn[];
     createdAt: string;
@@ -104,7 +105,6 @@ export type ExtensionMessage =
     | { type: "SW_SAVE_PROFILE"; payload: UserProfile; }
     | { type: "SW_OPEN_SIDEPANEL"; }
     | { type: "SW_GET_VOTE_HISTORY"; }
-    | { type: "SW_GET_VOTE_FOR_CONTENT"; payload: { contentId: string; }; }
     | { type: "SW_GET_AUTH_STATE"; }
     | { type: "SW_AUTH_REQUEST_CODE"; payload: { email: string; }; }
     | { type: "SW_AUTH_VERIFY_CODE"; payload: { email: string; code: string; }; }
@@ -114,8 +114,5 @@ export type ExtensionMessage =
     | { type: "SW_CLEAR_LOCAL_DATA"; }
     | { type: "SW_OPEN_LINK"; payload: { url: string; }; }
     | { type: "SW_DELETE_VOTE"; payload: { contentId: string; }; }
-    | { type: "SW_GET_STORY"; }
-    | { type: "SW_SAVE_STORY"; payload: StoryThread; }
-    | { type: "SW_CLEAR_STORY"; }
     | { type: "SW_GET_SERVER_STORY"; }
 ;

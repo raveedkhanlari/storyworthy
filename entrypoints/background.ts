@@ -16,9 +16,7 @@ import type {
 const STORAGE_KEYS = {
     installId: "sw_install_id",
     profile: "sw_profile",
-    votes: "sw_votes",
     auth: "sw_auth", // { token, userId, email }
-    story: "sw_story" // Single free-tier story thread
 } as const;
 
 export default defineBackground(() => {
@@ -62,13 +60,6 @@ export default defineBackground(() => {
                 return true;
             case "SW_GET_VOTE_HISTORY":
                 getVoteHistory()
-                    .then(sendResponse)
-                    .catch((error: Error) => sendResponse({
-                        ok: false, error: error.message
-                    }));
-                return true;
-            case "SW_GET_VOTE_FOR_CONTENT":
-                getVoteForContent(message.payload.contentId)
                     .then(sendResponse)
                     .catch((error: Error) => sendResponse({
                         ok: false, error: error.message
@@ -144,30 +135,6 @@ export default defineBackground(() => {
                     .catch((error: Error) => sendResponse({
                         ok: false,
                         error: error.message
-                    }));
-                return true;
-            case "SW_GET_STORY":
-                getStory()
-                    .then(sendResponse)
-                    .catch((error: Error) => sendResponse({
-                        ok: false,
-                        error: error.message,
-                    }));
-                return true;
-            case "SW_SAVE_STORY":
-                saveStory(message.payload)
-                    .then(sendResponse)
-                    .catch((error: Error) => sendResponse({
-                        ok: false,
-                        error: error.message,
-                    }));
-                return true;
-            case "SW_CLEAR_STORY":
-                clearStory()
-                    .then(sendResponse)
-                    .catch((error: Error) => sendResponse({
-                        ok: false,
-                        error: error.message,
                     }));
                 return true;
             case "SW_GET_SERVER_STORY":
@@ -272,9 +239,6 @@ export default defineBackground(() => {
             await browser.action.setTitle({ tabId, title: "StoryWorthy is not available on this page" });
         }
     });
-
-    syncPendingVotes();
-    setInterval(syncPendingVotes, 5 * 60 * 1000);
     
     async function getInstallId(): Promise<string> {
         const data = await browser.storage.local.get([STORAGE_KEYS.installId]);
@@ -322,52 +286,51 @@ export default defineBackground(() => {
     };
 
     async function submitVote(payload: SubmitVotePayload) {
-        const vote: VoteRecord = {
-            contentId: payload.contentId,
-            category: payload.category,
-            platform: payload.page.platform,
-            title: payload.page.title,
-            url: payload.page.canonicalUrl,
-            votedAt: new Date().toISOString(),
-            synced: false,
-            postContent: payload.postContent,
-        };
+        const auth = await getStoredAuth();
 
-        // Always save locally first
-        await saveVoteLocally(vote);
-
-        try {
-            const installId = await getInstallId();
-            const response = await fetch(`${API_BASE}/api/content/${payload.contentId}/vote`, {
-                method: "POST",
-                headers: { 
-                    "content-type": "application/json",
-                    ...(await authHeaders()), 
-                },
-                body: JSON.stringify({ 
-                    installId,
-                    category: payload.category,
-                    page: payload.page,
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error("API returned non-OK status");
-            }
-
-            await markVoteSynced(vote.votedAt);
-
+        if (!auth)
             return {
-                ok: true,
-                data: await response.json(),
+                ok: false,
+                error: "SIGN_IN_REQUIRED",
             };
-        } catch {
-            // Saved locally, will sync later
+
+        const installId = await getInstallId();
+        const response = await fetch(`${API_BASE}/api/content/${payload.contentId}/vote`, {
+            method: "POST",
+            headers: { 
+                "content-type": "application/json",
+                ...(await authHeaders()), 
+            },
+            body: JSON.stringify({
+                installId,
+                category: payload.category,
+                page: payload.page,
+                postContent: payload.postContent,
+            }),
+        });
+
+        if (response.status===401)
             return {
-                ok: true,
-                data: { queued: true }
+                ok: false,
+                error: "SIGN_IN_REQUIRED",
+            };
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => null);
+
+            return {
+                ok: false,
+                error: body?.error || "Failed to submit vote.",
+                lockedCategory: body?.lockedCategory ?? null,
             };
         }
+
+        await browser.storage.local.set({ sw_votes_updated: Date.now() });
+
+        return {
+            ok: true,
+            data: await response.json(),
+        };
     };
 
     async function saveProfile(profile: UserProfile) {
@@ -403,96 +366,47 @@ export default defineBackground(() => {
     };
 
     async function getVoteHistory(): Promise<ApiEnvelope<{ votes: VoteRecord[] }>> {
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
+        const auth = await getStoredAuth();
+
+        if (!auth)
+            return {
+                ok: true,
+                data: { votes: [] },
+            };
+
+        const response = await fetch(`${API_BASE}/api/votes`, {
+            method: "GET",
+            headers: { ...(await authHeaders()) },
+        });
+
+        if (response.status===401)
+            return {
+                ok: false,
+                error: "AUTH_EXPIRED",
+            };
+
+        if (!response.ok)
+            return {
+                ok: false,
+                error: "Could not load votes.",
+            };
+
+        const json = await response.json();
+        const votes: VoteRecord[] = (json?.data?.votes ?? []).map((v: any) => ({
+            contentId: v.contentId,
+            category: v.category,
+            platform: v.platform ?? "web",
+            title: v.title ?? "",
+            url: v.url ?? "",
+            votedAt: v.votedAt ?? "",
+            postContent: v.postContent ?? undefined,
+            synced: true,
+        }));
 
         return {
             ok: true,
             data: { votes },
         };
-    };
-
-    async function saveVoteLocally(vote: VoteRecord) {
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        let votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-
-        // Only one vote per content: remove any existing vote for this contentId
-        votes = votes.filter(v => v.contentId !== vote.contentId);
-
-        votes.unshift(vote);
-
-        if (votes.length>50) {
-            votes.length = 50;
-        }
-
-        await browser.storage.local.set({
-            [STORAGE_KEYS.votes]: votes
-        });
-    };
-
-    async function getVoteForContent(contentId: string): Promise<ApiEnvelope<{ category: string | null }>> {
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-        const vote = votes.find(v => v.contentId === contentId);
-
-        return {
-            ok: true,
-            data: { category: vote?.category ?? null },
-        };
-    };
-
-    async function markVoteSynced(votedAt: string) {
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-        const vote = votes.find(v => v.votedAt===votedAt);
-
-        if (vote) {
-            vote.synced = true;
-            await browser.storage.local.set({ [STORAGE_KEYS.votes]: votes });
-        }
-    };
-
-    async function syncPendingVotes() {
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-        const pending = votes.filter(v => !v.synced);
-
-        if (!pending.length) 
-            return;
-
-        const installId = await getInstallId();
-
-        for (const vote of pending) {
-            try {
-                const response = await fetch(`${API_BASE}/api/content/${vote.contentId}/vote`, {
-                    method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json", 
-                        ...(await authHeaders()),
-                    },
-                    body: JSON.stringify({
-                        installId,
-                        category: vote.category,
-                        page: {
-                            platform: vote.platform,
-                            url: vote.url,
-                            canonicalUrl: vote.url,
-                            pageKey: vote.contentId,
-                            title: vote.title,
-                            authorHandle: null,
-                            contentType: "post",
-                        },
-                    }),
-                });
-
-                if (response.ok) {
-                    await markVoteSynced(vote.votedAt);
-                }
-            } catch {
-                // Still offline - stop trying the rest
-                break;
-            }
-        }
     };
 
     async function getStoredAuth(): Promise<StoredAuth | null> {
@@ -563,8 +477,6 @@ export default defineBackground(() => {
             },
         });
 
-        await refreshServerHistory();
-
         return {
             ok: true,
             data: {
@@ -579,55 +491,6 @@ export default defineBackground(() => {
         await browser.storage.local.remove(STORAGE_KEYS.auth);
 
         return { ok: true };
-    };
-
-    async function refreshServerHistory(): Promise<void> {
-        const auth = await getStoredAuth();
-
-        if (!auth)
-            return;
-
-        const response = await fetch(`${API_BASE}/api/votes`, {
-            method: "GET",
-            headers: {...(await authHeaders()) },
-        });
-
-        if (response.status===401) {
-            await browser.storage.local.remove(STORAGE_KEYS.auth);
-
-            return;
-        }
-
-        if (!response.ok)
-            return;
-
-        const json = await response.json();
-        const serverVotes: VoteRecord[] = (json?.data?.votes ?? []).map((v: any) => ({
-            contentId: v.contentId,
-            category: v.category,
-            platform: v.platform ?? "web",
-            title: v.title ?? "",
-            url: v.url ?? "",
-            votedAt: v.votedAt ?? new Date().toISOString(),
-            synced: true,
-        }));
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const local = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-        const byContent = new Map<string, VoteRecord>();
-
-        for (const v of [...serverVotes, ...local]) {
-            const existing = byContent.get(v.contentId);
-
-            if (!existing || v.votedAt>existing.votedAt)
-                byContent.set(v.contentId, v);
-        }
-
-        const merged = [...byContent.values()].sort((a, b) => (b.votedAt>a.votedAt ? 1 : -1));
-
-        if (merged.length>50)
-            merged.length = 50;
-
-        await browser.storage.local.set({ [STORAGE_KEYS.votes]: merged });
     };
 
     async function getAdvice(payload: AdvicePayload): Promise<ApiEnvelope> {
@@ -730,8 +593,6 @@ export default defineBackground(() => {
     };
 
     async function clearLocalData(): Promise<ApiEnvelope> {
-        await browser.storage.local.remove([STORAGE_KEYS.votes]);
-
         return { ok: true };
     };
 
@@ -751,60 +612,36 @@ export default defineBackground(() => {
         // Remove from backend (only if signed in); deletes across account.
         const auth = await getStoredAuth();
 
-        if (auth) {
-            const response = await fetch(`${API_BASE}/api/votes/delete`, {
-                method: "POST",
-                headers: {
-                    "content-type": "application/json",
-                    ...(await authHeaders()),
-                },
-                body: JSON.stringify({ contentId }),
-            });
+        if (!auth)
+            return {
+                ok: false,
+                error: "AUTH_EXPIRED",
+            };
 
-            if (response.status===401)
-                return {
-                    ok: false,
-                    error: "AUTH_EXPIRED"
-                };
+        const response = await fetch(`${API_BASE}/api/votes/delete`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                ...(await authHeaders()),
+            },
+            body: JSON.stringify({ contentId }),
+        });
+
+        if (response.status===401)
+            return {
+                ok: false,
+                error: "AUTH_EXPIRED"
+            };
             
-            if (!response.ok)
-                return {
-                    ok: false,
-                    error: "Could not delete vote.",
-                };
-        }
-
-        // Remove from local history regardless.
-        const data = await browser.storage.local.get([STORAGE_KEYS.votes]);
-        const votes = (data[STORAGE_KEYS.votes] as VoteRecord[] | undefined) ?? [];
-        const filtered = votes.filter(v => v.contentId!==contentId);
-
-        await browser.storage.local.set({ [STORAGE_KEYS.votes]: filtered });
+        if (!response.ok)
+            return {
+                ok: false,
+                error: "Could not delete vote.",
+            };
 
         return {
             ok: true,
             data: { contentId },
         };
-    };
-
-    async function getStory(): Promise<ApiEnvelope<{ story: StoryThread | null }>> {
-        const data = await browser.storage.local.get([STORAGE_KEYS.story]);
-
-        return {
-            ok: true,
-            data: { story: data[STORAGE_KEYS.story] as StoryThread | undefined ?? null }
-        };
-    };
-
-    async function saveStory(story: StoryThread): Promise<ApiEnvelope> {
-        await browser.storage.local.set({ [STORAGE_KEYS.story]: story });
-
-        return { ok: true };
-    };
-
-    async function clearStory(): Promise<ApiEnvelope> {
-        await browser.storage.local.remove(STORAGE_KEYS.story);
-
-        return { ok: true };
     };
 });

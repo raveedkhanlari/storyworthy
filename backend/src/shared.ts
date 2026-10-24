@@ -42,6 +42,7 @@ export type StoryTurnRow = {
     turn: number;
     paragraph: string;
     advice: string;
+    summary?: string;
     createdAt: string;
 };
 

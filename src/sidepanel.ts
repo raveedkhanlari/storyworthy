@@ -44,6 +44,8 @@ const adviceConfirmStart = document.querySelector<HTMLButtonElement>("#advice-co
 const adviceConfirmCancel = document.querySelector<HTMLButtonElement>("#advice-confirm-cancel");
 const adviceInputArea = document.querySelector<HTMLDivElement>("#advice-input-area");
 const adviceParagraphLabel = document.querySelector<HTMLLabelElement>("#advice-paragraph-label");
+const authResendBtn = document.querySelector<HTMLButtonElement>("#auth-resend")
+
 
 const PROFILE_ENABLED = false; // Profile is deferred to paid tier. Keep code but hide it in freemium tier.
 const MAX_ADVICE_WORDS = 80;
@@ -59,6 +61,7 @@ let pendingStoryVote: VoteRecord | null = null;
 let activeStory: StoryThread | null = null; // Story current open in modal
 let currentStory: StoryThread | null = null; // User's single saved story
 let interestedInPaid = false;
+let resendTimer: ReturnType<typeof setInterval> | null = null;
 
 init().catch((error) => {
     setStatus(profileStatus, error instanceof Error ? error.message : "Failed to initialize.", "error");
@@ -95,10 +98,13 @@ authEmailForm?.addEventListener("submit", async (event) => {
     pendingAuthEmail = email;
 
     if (authEmailForm)
-            authEmailForm.hidden = true;
+        authEmailForm.hidden = true;
 
-    if (authCodeForm)
-            authCodeForm.hidden = false;
+    if (authCodeForm) {
+        authCodeForm.hidden = false;
+
+        startResendCountdown(60);
+    }
 
     authCodeInput?.focus();
     setStatus(authStatus, `We emailed a 6-digit code to ${email}. Check your inbox (and spam).`, "notice");
@@ -161,6 +167,27 @@ authSignOutBtn?.addEventListener("click", async () => {
     setStatus(authStatus, "Signed out.", "notice");
 });
 
+authResendBtn?.addEventListener("click", async () => {
+    if (!pendingAuthEmail)
+        return;
+
+    setStatus(authStatus, "Resending code...", "notice");
+
+    const response = await browser.runtime.sendMessage({
+        type: "SW_AUTH_REQUEST_CODE",
+        payload: { email: pendingAuthEmail },
+    });
+
+    if (!response?.ok) {
+        setStatus(authStatus, response?.error || "Could not resend code.", "error");
+
+        return;
+    }
+
+    setStatus(authStatus, "A new code was sent. Check your inbox (and spam).", "notice");
+    startResendCountdown(60);
+});
+
 profileForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -221,6 +248,7 @@ adviceConfirmStart?.addEventListener("click", () => {
         genre: pendingStoryVote.category,
         postTitle: pendingStoryVote.title,
         postContent: pendingStoryVote.postContent ?? "",
+        summary: "",
         ownerUserId: currentAuth.userId ?? "",
         turns: [],
         createdAt: new Date().toISOString(),
@@ -253,14 +281,14 @@ document.addEventListener("visibilitychange", () => {
 
 // Refresh vote history when storage changes (e.g., vote from inline widget)
 browser.storage.onChanged.addListener((changes) => {
-    if (changes.sw_votes) {
+    if (changes.sw_votes_updated) {
         loadVoteHistory();
     }
 });
 
 // Any interaction in panel counts as activity.
 ["click", "keydown", "input"].forEach((evt) => {
-    document.addEventListener(evt, resetInactivityTimer, { passive: true });
+    document.addEventListener(evt, () => resetInactivityTimer(), { passive: true });
 });
 
 async function init() {
@@ -296,7 +324,7 @@ function renderAuth(state: AuthState) {
     currentAuth = state;
 
     // Start/stop inactivity timer based on session state.
-    resetInactivityTimer();
+    resetInactivityTimer(false);
 
     const signedIn = state.signedIn;
 
@@ -443,13 +471,21 @@ function renderProfile(profile: UserProfile | null) {
     };
 };
 
-function setStatus(el: HTMLDivElement | null, text: string, kind: "default" | "success" | "error" | "notice") {
+function setStatus(el: HTMLDivElement | null, text: string, kind: "default" | "success" | "error" | "notice" | "loading") {
     if (!el) {
         return;
     };
 
-    el.textContent = text;
     el.className = "status";
+
+    if (kind==="loading") {
+        el.classList.add("loading");
+        el.innerHTML = `${text}<span class="dots"><span>.</span><span>.</span><span>.</span></span>`;
+
+        return;
+    };
+
+    el.textContent = text;
 
     if (kind==="success") {
         el.classList.add("success");
@@ -463,6 +499,35 @@ function setStatus(el: HTMLDivElement | null, text: string, kind: "default" | "s
         el.classList.add("notice");
     };
 };
+
+function startResendCountdown(seconds: number) {
+    if (!authResendBtn)
+        return;
+
+    if (resendTimer)
+        clearInterval(resendTimer);
+
+    let remaining = seconds;
+
+    authResendBtn.disabled = true;
+    authResendBtn.textContent = `Resend Code (${remaining}s)`;
+
+    resendTimer = setInterval(() => {
+        remaining -= 1;
+
+        if (remaining<=0) {
+            clearInterval(resendTimer!);
+
+            resendTimer = null;
+            authResendBtn.disabled = false;
+            authResendBtn.textContent = "Resend Code";
+
+            return;
+        }
+
+        authResendBtn.textContent = `Resend Code (${remaining}s)`;
+    }, 1000);
+}
 
 async function loadVoteHistory() {
     const response = await browser.runtime.sendMessage({
@@ -506,11 +571,11 @@ async function loadVoteHistory() {
                         class="sw-advice-btn" 
                         data-vote-index="${i}"${currentStory && currentStory.contentId!==vote.contentId ? " disabled" : ""}
                     >
-                        Get Advice
+                        ${currentStory && currentStory.contentId===vote.contentId ? "Review Story" : "Get Advice"}
                     </button>
                     <button
                         class="sw-delete-btn"
-                        data-vote-index="${i}"
+                        data-vote-index="${i}"${currentStory && currentStory.contentId===vote.contentId ? " disabled title=\"This vote has a story and can't be deleted\"" : ""}
                     >
                         Delete Vote
                     </button>
@@ -537,6 +602,9 @@ async function loadVoteHistory() {
             btn.addEventListener("click", async () => {
                 const idx = Number(btn.dataset.voteIndex);
                 const vote = votes[idx];
+
+                if (btn.disabled)
+                    return;
 
                 if (!vote)
                     return;
@@ -611,7 +679,15 @@ async function loadStory() {
         return;
     }
 
-    if (!serverResp?.ok || !serverResp.data?.story) {
+    if (!serverResp?.ok) {
+        currentStory = null;
+
+        return;
+    }
+
+    interestedInPaid = serverResp.data?.interestedInPaid===true;
+
+    if (!serverResp.data?.story) {
         currentStory = null;
 
         return;
@@ -620,12 +696,12 @@ async function loadStory() {
     const s = serverResp.data.story;
     const vote = await findVoteByContentId(s.voteId);
 
-    interestedInPaid = serverResp.data?.interestedInPaid===true;
     currentStory = {
         contentId: s.voteId,
         genre: vote?.category ?? "",
         postTitle: vote?.title ?? "",
         postContent: vote?.postContent ?? "",
+        summary: s.summary ?? "",
         ownerUserId: currentAuth.userId ?? "",
         turns: s.turns.map((t: any) => ({
             paragraph: t.paragraph,
@@ -634,11 +710,6 @@ async function loadStory() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
-
-    await browser.runtime.sendMessage({
-        type: "SW_SAVE_STORY",
-        payload: currentStory,
-    });
 }
 
 async function findVoteByContentId(contentId: string): Promise<VoteRecord | null> {
@@ -798,7 +869,21 @@ function renderAdviceModal() {
         ;
 
     if (adviceContext)
-        adviceContext.innerHTML = `<span class="sw-title">${escapeHtml(activeStory.postTitle)}</span>`;
+        adviceContext.innerHTML = `
+            <div class="sw-ctx-row">
+                <span class="sw-ctx-label">Post/Article</span>
+                <span class="sw-ctx-value">${escapeHtml(activeStory.postTitle)}</span>
+            </div>
+            ${activeStory.summary ? `
+            <div class="sw-ctx-row">
+                <span class="sw-ctx-label">Summary</span>
+                <span class="sw-ctx-value">${escapeHtml(activeStory.summary)}</span>
+            </div>` : ""}
+            <div class="sw-ctx-row">
+                <span class="sw-ctx-label">Genre</span>
+                <span class="sw-ctx-value">${escapeHtml(activeStory.genre)}</span>
+            </div>
+        `;
 
     // Render conversation so far (paragraph + advice).
     if (adviceResult) {
@@ -907,7 +992,7 @@ async function submitAdvice() {
     if (adviceSubmit)
         adviceSubmit.disabled = true;
 
-    setStatus(adviceStatus, "Getting advice...", "notice");
+    setStatus(adviceStatus, "Getting advice", "loading");
 
     const response = await browser.runtime.sendMessage({
         type: "SW_GET_ADVICE",
@@ -946,17 +1031,15 @@ async function submitAdvice() {
     }
 
     // Append turn, persist, re-render.
+    if (response.data.summary && !activeStory.summary)
+        activeStory.summary = response.data.summary;
+
     activeStory.turns.push({
         paragraph,
         advice: response.data.advice,
     });
     activeStory.updatedAt = new Date().toISOString();
     currentStory = activeStory;
-
-    await browser.runtime.sendMessage({ 
-        type: "SW_SAVE_STORY",
-        payload: activeStory,
-    });
 
     renderAdviceModal();
     loadVoteHistory();
@@ -1007,7 +1090,7 @@ function clearInactivityTimer() {
     }
 };
 
-function resetInactivityTimer() {
+function resetInactivityTimer(stamp = true) {
     // Only track inactivity while signed in.
     if (!currentAuth.signedIn) {
         clearInactivityTimer();
@@ -1015,7 +1098,8 @@ function resetInactivityTimer() {
         return;
     }
 
-    markActive();
+    if (stamp)
+        markActive();
 
     if (!inactivityTimer) {
         // Poll every minute: if an hour has passed since last activity, sign out.

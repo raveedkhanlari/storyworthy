@@ -28,6 +28,7 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
                 title: item.title ?? "",
                 url: item.url ?? "",
                 votedAt: item.votedAt ?? "",
+                postContent: item.postContent ?? null,
             });
         }
 

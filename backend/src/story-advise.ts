@@ -18,13 +18,15 @@ const FIRST_TURN_SYSTEM =
     "GUIDANCE:\n" +
     "- Cover all five pillars, each introduced with its **bold** keyword, but keep the voice vivid and motivating, not clinical.\n" +
     "- Phrase growth suggestions as exciting possibilities ('imagine if..', 'you could...'), never as deficiencies.\n" +
-    "- Reference the post TITLE; if post CONTENT is empty (e.g. a video), note there was no post text and work from the title\n" +
+    "- Ground your advice in SPECIFIC details from the POST CONTENT. When a suggestion draws on the post, quote or name the exact detail (e.g. 'the handprints pressed into the lower third', 'the Oct. 15 Sotheby's auction', 'his mismatched pupils'). Do NOT rely on your own outside knowledge of the subject - use ONLY what the POST CONTENT states.\n" +
+    "- If post CONTENT is empty (e.g. a video), say so and work from the TITLE and GENRE alone and draw your advice based on what your own knowledge regarding TITLE and GENRE suggests.\n" +
     "- End with with a vivid, specific hook question that makes them want to write the next paragraph immediately.\n" +
     "- Use ONLY **double-asterisk bold**. No *italics* or other markdown. Do NOT correct grammar or rewrite their words.\n" +
     "Use markdown bullets. Keep it under 320 words, energetic and encouraging."
 ;
 const CONTINUATION_SYSTEM =
-    "You are a story-craft coach in StoryWorthy, continuing a coaching conversation about the writer's developing story, grounded in the POST and the GENRE.\n\n" +
+    "You are a story-craft coach in StoryWorthy, continuing a coaching conversation about the writer's developing story, grounded in the POST and the GENRE.\n" +
+    "Ground suggestions in specific details stated in the POST CONTENT; cite the exact detail rather than general knowledge of the subject.\n\n" +
     PILLARS +
     "This is a CONTINUATION. The five pillars remain the framework, but FOCUS your advice on whichever pillar(s) the writer's NEW paragraph most engages, and evaluate them strictly against the genre and the post. For example, if they've deepened the SCENE but it clashes with the chosen genre (e.g. a very dark scene under a comedy genre), focus on that tension: is it workable given the post's theme, and how? Reference how this paragraph builds on what came before. Bold any pillar keywords you address. Do NOT correct grammar. Do NOT rewrite or write the story for them. Use markdown. Keep it under 260 words."
 ;
@@ -81,6 +83,26 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     const turnNumber = storyTurns.length + 1;
     const isFirstTurn = turnNumber===1;
 
+    let summary = "";
+    if (isFirstTurn && postContent) {
+        try {
+            summary = await askClaude(
+                "You summarize a source post for a writer. Return ONLY a plain-text summary of at most 80 words. No preamble, no markdown, no quotes.",
+                [{ 
+                    role: "user",
+                    text: `POST TITLE: ${postTitle || "(none)"}\n\nPOST CONTENT: ${postContent.slice(0, 4000)}`
+                }],
+                200
+            )
+        } catch (err) {
+            console.error("Summary generation failed", err);
+
+            summary = "";
+        }
+    } else if (!isFirstTurn) {
+        summary = storyTurns.find(t => t.turn===1)?.summary ?? "";
+    }
+
     // 7. Build system prompt, current and history of messages
     const system = isFirstTurn ? FIRST_TURN_SYSTEM : CONTINUATION_SYSTEM;
     const context = 
@@ -126,6 +148,7 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
         turn: turnNumber,
         paragraph,
         advice,
+        summary,
         createdAt: new Date().toISOString(),
     };
 
@@ -134,6 +157,7 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     return ok({
         turn: turnNumber,
         advice,
+        summary,
         turnsRemaining: Math.max(0, MAX_TURNS - turnNumber),
         thread: [...storyTurns, row].map(t => ({ 
             turn: t.turn,

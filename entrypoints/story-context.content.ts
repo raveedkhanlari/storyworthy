@@ -1,5 +1,6 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { browser } from "wxt/browser";
+import { Readability } from "@mozilla/readability";
 import "@/assets/content-widget.css";
 import type {
     SupportedPlatform,
@@ -132,18 +133,25 @@ function findRedditPosts(): DetectedPost[] {
 };
 
 function findWebArticle(): DetectedPost[] {
-    // Prefer the article's own h1, else the first h1 on the page
-    const article =document.querySelector("article");
-    const h1 = article?.querySelector("h1") ?? document.querySelector("h1");
+    const canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href ?? window.location.href;
+    const ogTitle = document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.content;
 
-    if (!h1)
+    // 1. Light-DOM heading (metro, CBC, most sites).
+    const article = document.querySelector("article");
+
+    let heading: HTMLElement | null = article?.querySelector("h1") ?? document.querySelector("h1");
+
+    // 2. Shadow-DOM sites (e.g. MSN): find title heading across nested shadow roots.
+    if (!heading)
+        heading = findHeadingInShadow(ogTitle || document.title || "");
+
+    if (!heading)
         return [];
 
-    const title = h1.textContent?.trim().slice(0, 200) ?? document.title;
-    const canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href ?? window.location.href;
+    const title = (heading.textContent?.trim() || ogTitle || document.title || "").slice(0, 200);
 
     return [{
-        element: h1,
+        element: heading,
         context: {
             platform: "web",
             url: window.location.href,
@@ -156,20 +164,98 @@ function findWebArticle(): DetectedPost[] {
     }];
 };
 
+// Pierce nested shadow roots to find article's title heading element.
+function findHeadingInShadow(titleText: string): HTMLElement | null {
+    const needle = titleText.trim().slice(0, 20);
+
+    if (!needle)
+        return null;
+
+    let found: HTMLElement | null = null;
+
+    const walk = (root: Document | ShadowRoot) => {
+        const els = root.querySelectorAll<HTMLElement>("*");
+
+        for (const el of els) {
+            if (found)
+                return;
+
+            const sr = el.shadowRoot;
+
+            if (sr)
+                walk(sr);
+
+            if (found)
+                return;
+
+            if (/^H[1-3]$/.test(el.tagName)) {
+                const txt = (el.textContent ?? "").trim();
+
+                if (txt.startsWith(needle)) {
+                    found = el;
+
+                    return;
+                }
+            }
+        }
+    };
+
+    walk(document);
+
+    return found;
+};
+
 function extractPostText(element: HTMLElement, platform: SupportedPlatform): string {
-    let source: HTMLElement | null = element;
+    // X / Reddit: post element itself holds text
+    if (platform!=="web")
+        return (element.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 4000);
 
-    // For web articles, `element` is the h1 - climb to the article/body for full text.
-    if (platform==="web")
-        source = element.closest("article") ?? document.querySelector("article") ?? document.body;
+    // Web articles try Readability (light DOM) first. Parse a clone so live page isn't mutated.
+    try {
+        const docClone = document.cloneNode(true) as Document;
+        const article = new Readability(docClone).parse();
+        const text = (article?.textContent ?? "").replace(/\s+/g, " ").trim();
 
-    const text = source?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+        if (text.length>200)
+            return text.slice(0, 4000);
+    } catch {
+        // Fall through to shodow-DOM fallback.
+    }
 
-    return text.slice(0, 4000);
+    // Shadow-DOM sites (e.g. MSN): Readability can't see into shadow roots. Prefer an article-like shadow host, else deep-walk whole document.
+    const artcileHost = 
+        document.querySelector("cp-article") ??
+        document.querySelector('[itemprop="articleBody"]') ??
+        document.querySelector("article") ??
+        document.querySelector("main")
+    ;
+    const deep = deepText((artcileHost as Element) ?? document.body).replace(/\s+/g, " ").trim();
+
+    if (deep.length>200)
+        return deep.slice(0, 4000);
+
+    // Last resort: light-DOM innerText.
+    const fallback = (document.querySelector("main") ?? document.body);
+
+    return (fallback?.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 4000);
+};
+
+function deepText(root: Element | ShadowRoot | Document): string {
+    let text = "";
+
+    root.querySelectorAll("*").forEach((el) => {
+        const sr = (el as HTMLElement).shadowRoot;
+
+        if (sr)
+            text += " " + deepText(sr);
+    });
+
+    text += " " + ((root as HTMLElement).textContent ?? "");
+
+    return text;
 };
 
 function injectInlineWidget(postElement: HTMLElement, context: PostContext, large = false) {
-    const autoCloseMs = large ? 7000 : 4000;
     const widget = document.createElement("div");
 
     widget.className = large ? "sw-inline-widget sw-inline-widget-large sw-inline-widget-web" : "sw-inline-widget";
@@ -190,6 +276,7 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
             panelTimer = null;
         }
     };
+
     const closePanel = () => {
         clearPanelTimer();
         removePanel(widget);
@@ -197,35 +284,87 @@ function injectInlineWidget(postElement: HTMLElement, context: PostContext, larg
         panelOpen = false;
     };
 
+    const onOutsideClick = (ev: MouseEvent) => {
+        const panel = (widget as any)._swPanel as HTMLElement | undefined;
+        const target = ev.target as Node;
+
+        if (widget.contains(target) || panel?.contains(target))
+            return;
+
+        closePanel();
+    };
+
+    const closeWithCleanup = () => {
+        document.removeEventListener("click", onOutsideClick, true);
+        closePanel();
+    };
+
     widget.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
 
         if (panelOpen) {
-            closePanel();
+            closeWithCleanup();
         } else {
             panelOpen = true;
 
             const postContent = extractPostText(postElement, context.platform);
 
             showVotePanel(widget, context, postContent, {
-                startIdleTimer: () => {
-                    panelTimer = setTimeout(closePanel, autoCloseMs);
-                },
-                cancelIdleTimer: clearPanelTimer,
+                startIdleTimer: () => {},
+                cancelIdleTimer: () => {},
                 closeAfterResponse: () => {
                     clearPanelTimer();
-
-                    panelTimer = setTimeout(closePanel, 1000);
+                    panelTimer = setTimeout(closeWithCleanup, 1000);
                 },
             });
 
-            panelOpen = true;
+            setTimeout(() => document.addEventListener("click", onOutsideClick, true), 0);
         }
     });
 
-    postElement.style.position = "relative";
-    postElement.appendChild(widget);
+    const isFloating = postElement===document.body;
+
+    if (isFloating) {
+        // No DOM anchor (shadow-DOM site): pin to top-left of view-port.
+        widget.classList.add("sw-inline-widget-floating");
+        document.body.appendChild(widget);
+    } else if (large) {
+        // Web article: sit inline at start of heading. Apply critical styles inline so widget renders correctly even inside a styled-isolated shadow root.
+        Object.assign(widget.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "28px",
+            height: "28px",
+            borderRadius: "8px",
+            background: "#f5c518",
+            cursor: "pointer",
+            verticalAlign: "middle",
+            marginRight: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.3)",
+            flex: "0 0 auto",
+            boxSizing: "border-box",
+        } as Partial<CSSStyleDeclaration>);
+
+        const icon = widget.querySelector<HTMLElement>(".sw-inline-icon");
+
+        if (icon) {
+            Object.assign(icon.style, {
+                fontSize: "14px",
+                fontWeight: "800",
+                color: "#0d9668",
+                fontFamily: "Inter, Segoe UI, sans-serif",
+                PointerEvents: "none",
+                lineHeight: "1",
+            } as Partial<CSSStyleDeclaration>);
+        }
+
+        postElement.insertBefore(widget, postElement.firstChild);
+    } else {
+        postElement.style.position = "relative";
+        postElement.appendChild(widget);
+    }
 };
 
 async function showVotePanel(widget: HTMLElement, context: PostContext, postContent: string, controller: PanelController) {
@@ -236,81 +375,152 @@ async function showVotePanel(widget: HTMLElement, context: PostContext, postCont
     panel.innerHTML = `
         <div class="sw-panel-title">This content is <span class="sw-brand">StoryWorthy</span> for:</div>
         <div class="sw-categories">
-            <button data-category="thriller">Thriller</button>
-            <button data-category="drama">Drama</button>
-            <button data-category="sci-fi">Sci-Fi</button>
-            <button data-category="romance">Romance</button>
-            <button data-category="horror">Horror</button>
             <button data-category="comedy">Comedy</button>
-            <button data-category="mystery">Mystery</button>
+            <button data-category="drama">Drama</button>
             <button data-category="fantasy">Fantasy</button>
+            <button data-category="horror">Horror</button>
+            <button data-category="mystery">Mystery</button>
+            <button data-category="romance">Romance</button>
+            <button data-category="sci-fi">Sci-Fi</button>
+            <button data-category="thriller">Thriller</button>
+            <button data-category="__other__">Other</button>
         </div>
         <div class="sw-status"></div>
     `;
 
-    const status = panel.querySelector<HTMLElement>(".sw-status")!;
     const buttons = panel.querySelectorAll<HTMLButtonElement>(".sw-categories button");
 
-    const contentId = `local-${context.pageKey}`;
+    async function submitVote(category: string) {
+        controller.cancelIdleTimer();
 
-    // Highlight a previously selected category, if any
-    const existing = await browser.runtime.sendMessage({
-        type: "SW_GET_VOTE_FOR_CONTENT",
-        payload: { contentId },
-    });
+        const liveStatus = panel.querySelector<HTMLElement>(".sw-status");
 
-    if (existing?.ok && existing.data?.category) {
-        panel.querySelector<HTMLButtonElement>(
-            `.sw-categories button[data-category="${existing.data.category}"]`
-        )?.classList.add("sw-selected");
+        if (liveStatus)
+            liveStatus.textContent = "Submitting...";
+
+        const initResponse = await browser.runtime.sendMessage({
+            type: "SW_INIT_PAGE",
+            payload: context,
+        });
+
+        if (!initResponse?.ok || !initResponse.data?.contentId) {
+            if (liveStatus)
+                liveStatus.textContent = "Could not register.";
+
+            controller.closeAfterResponse();
+
+            return;
+        }
+
+        const voteResponse = await browser.runtime.sendMessage({
+            type: "SW_SUBMIT_VOTE",
+            payload: {
+                contentId: initResponse.data.contentId,
+                category,
+                page: context,
+                postContent,
+            },
+        });
+
+        if (voteResponse?.ok) {
+            if (liveStatus)
+                liveStatus.textContent = `Voted: ${category}`;
+
+            browser.runtime.sendMessage({ type: "SW_OPEN_SIDEPANEL" });
+            controller.closeAfterResponse();
+        } else if (voteResponse?.error==="SIGN_IN_REQUIRED") {
+            controller.cancelIdleTimer();
+
+            panel.innerHTML = `
+                <div class="sw-panel-title">You picked <span class="sw-brand">${category}</span></div>
+                <div class="sw-signin-msg">Sign in to save your vote.</div>
+                <button class="sw-signin-btn" type="button">Sign In</button>
+            `;
+
+            panel.querySelector<HTMLButtonElement>(".sw-signin-btn")?.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                browser.runtime.sendMessage({ type: "SW_OPEN_SIDEPANEL" });
+                controller.closeAfterResponse();
+            });
+        } else if (voteResponse?.error==="STORY_LOCKED") {
+            if (voteResponse.lockedCategory===category) { // Same genre -> Open side.
+                browser.runtime.sendMessage({ type: "SW_OPEN_SIDEPANEL" });
+                controller.closeAfterResponse();
+            } else { // Different genre -> Keep widget open, explain the lock.
+                controller.cancelIdleTimer();
+
+                if (liveStatus)
+                    liveStatus.textContent = "This post already has a story. Its genre is locked.";
+            }
+        } else {
+            if (liveStatus)
+                liveStatus.textContent = "Vote failed.";
+
+            controller.closeAfterResponse();
+        }
+    }
+
+    function showOtherInput() {
+        controller.cancelIdleTimer();
+
+        panel.innerHTML = `
+            <div class="sw-panel-title">Enter a <span class="sw-brand">genre</span></div>
+            <div class="sw-other-row">
+                <input class="sw-other-input" type="text" maxlength="30" placeholder="e.g. Satire" />
+                <button class="sw-other-submit" type="button">Vote</button>
+            </div>
+            <div class="sw-status"></div>
+        `;
+
+        const input = panel.querySelector<HTMLInputElement>(".sw-other-input")!;
+        const otherStatus = panel.querySelector<HTMLElement>(".sw-status")!;
+        const submitBtn = panel.querySelector<HTMLButtonElement>(".sw-other-submit")!;
+
+        input.focus();
+
+        const submit = () => {
+            const value = input.value.trim().toLowerCase();
+
+            if (!value) {
+                otherStatus.textContent = "Type a genre first.";
+
+                return;
+            }
+
+            submitVote(value);
+        };
+
+        submitBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            submit();
+        });
+
+        input.addEventListener("keydown", (e) => {
+            if (e.key==="Enter") {
+                e.preventDefault();
+                submit();
+            }
+        });
     }
 
     buttons.forEach(btn => {
-        btn.addEventListener("click", async (e) => {
+        btn.addEventListener("click", (e) => {
             e.stopPropagation();
 
             const category = btn.dataset.category;
 
-            if (!category) 
+            if (!category)
                 return;
-            
-            controller.cancelIdleTimer();
-            status.textContent = "Submitting...";
 
-            const initResponse = await browser.runtime.sendMessage({
-                type: "SW_INIT_PAGE",
-                payload: context,
-            });
-
-            if (!initResponse?.ok || !initResponse.data?.contentId) {
-                status.textContent = "Could not register.";
-                controller.closeAfterResponse();
+            if (category==="__other__") {
+                showOtherInput();
 
                 return;
             }
 
-            const voteResponse = await browser.runtime.sendMessage({
-                type: "SW_SUBMIT_VOTE",
-                payload: {
-                    contentId: initResponse.data.contentId,
-                    category,
-                    page: context,
-                    postContent,
-                },
-            });
-
-            if (voteResponse?.ok) {
-                buttons.forEach(b => b.classList.remove("sw-selected"));
-                btn.classList.add("sw-selected");
-                status.textContent = `Voted: ${category}`;
-
-                // Open side panel while we still have user gesture (user's click)
-                browser.runtime.sendMessage({ type: "SW_OPEN_SIDEPANEL" });
-            } else {
-                status.textContent = "Vote failed.";
-            }
-
-            controller.closeAfterResponse();
+            buttons.forEach(b => b.classList.remove("sw-selected"));
+            btn.classList.add("sw-selected");
+            submitVote(category);
         });
     });
 

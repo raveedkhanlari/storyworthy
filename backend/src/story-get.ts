@@ -18,10 +18,12 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
 
     const voteId = turns[0].voteId;
     const storyTurns = turns.filter(t => t.voteId===voteId);
+    const summary = storyTurns.find(t => t.turn===1)?.summary ?? "";
 
     return ok({
         story: {
             voteId,
+            summary,
             turns: storyTurns.map(i => ({
                 turn: i.turn,
                 paragraph: i.paragraph,

@@ -60,14 +60,12 @@ Resources:
       AttributeDefinitions:
         - AttributeName: contentId
           AttributeType: S
-        - AttributeName: installId
-          AttributeType: S
         - AttributeName: userId
           AttributeType: S
       KeySchema:
         - AttributeName: contentId
           KeyType: HASH
-        - AttributeName: installId
+        - AttributeName: userId
           KeyType: RANGE
       GlobalSecondaryIndexes:
         - IndexName: byUser
@@ -139,6 +137,8 @@ Resources:
             TableName: !Ref VotesTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ContentTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref StoriesTable
       Events:
         Api:
           Type: HttpApi

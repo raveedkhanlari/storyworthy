@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
-import { ddb, TABLES, ok, fail, getAuth } from "./shared";
+import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { ddb, TABLES, ok, fail, getAuth, getUserTurns } from "./shared";
 
 export const handler = async (event: APIGatewayProxyEventV2) => {
     const contentId = event.pathParameters?.contentId;
@@ -21,20 +21,45 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
 
     const { installId, category, page, postContent } = payload;
 
-    if (!installId || !category)
-        return fail("Missing installId or category");
-
     const claims = getAuth(event);
-    const userId = claims?.sub ?? null;
+
+    if (!claims)
+        return fail("SIGN_IN_REQUIRED", 401);
+
+    if (!category)
+        return fail("Missing category");
+
+    const userId = claims.sub ?? null;
+    const turns = await getUserTurns(userId);
+
+    if (turns.some(t => t.voteId===contentId)) {
+        const existing = await ddb.send(new GetCommand({
+            TableName: TABLES.votes,
+            Key: {
+                contentId,
+                userId,
+            },
+        }));
+
+        return {
+            statusCode: 409,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ok: false,
+                error: "STORY_LOCKED",
+                lockedCategory: existing.Item?.category ?? null,
+            }),
+        };
+    }
 
     // One vote per user per content: composite key overwrites any prior vote
     await ddb.send(new PutCommand({
         TableName: TABLES.votes,
         Item: {
             contentId,
-            installId,
-            category,
             userId,
+            installId: installId ?? null,
+            category,
             platform: page?.platform ?? null,
             title: page?.title ?? null,
             url: page?.canonicalUrl ?? page?.url ?? null,
