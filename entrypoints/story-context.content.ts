@@ -1,6 +1,7 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { browser } from "wxt/browser";
 import { Readability } from "@mozilla/readability";
+import { isSupportedUrl } from "@/utils/platform";
 import "@/assets/content-widget.css";
 import type {
     SupportedPlatform,
@@ -10,6 +11,7 @@ import type {
 } from "@/utils/types";
 
 let articlePageCache: boolean | null = null;
+let adultPageCache: boolean | null = null;
 
 export default defineContentScript({
     matches: [
@@ -42,6 +44,9 @@ export default defineContentScript({
 });
 
 function scanAndInjectWidgets() {
+    if (!isSupportedUrl(window.location.href) || isAdultContentPage())
+        return;
+
     const platform = detectPlatform();
 
     if (!platform)
@@ -64,7 +69,6 @@ function scanAndInjectWidgets() {
 
         injectInlineWidget(post.element, post.context, platform==="web");
     }
-
 };
 
 function findXPosts(): DetectedPost[] {
@@ -600,6 +604,29 @@ function detectPlatform(): SupportedPlatform | null {
     };
 
     return null;
+};
+
+function isAdultContentPage(): boolean {
+    if (adultPageCache!==null)
+        return adultPageCache;
+
+    let isAdult = false;
+
+    const metas = document.querySelectorAll<HTMLMetaElement>('meta[name="RATING"], meta[name="rating"]');
+
+    for (const m of metas) {
+        const v = (m.content || "").toUpperCase();
+
+        if (v.includes("RTA-5042-1996-1400-1577-RTA") || v==="ADULT" || v==="MATURE" || v==="XXX") {
+            isAdult = true;
+
+            break;
+        }
+    }
+
+    adultPageCache = isAdult;
+
+    return isAdult;
 };
 
 function isArticlePage(): boolean {

@@ -17,6 +17,12 @@ const localIpPatterns = [
     /^192\.168\./,
     /^169\.254\./ // Link-local IPv4: 169.254.0.0/16
 ];
+const adultDomains = [
+    "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn", "youjizz", "spankbang", "brazzers", "onlyfans", "chaturbate", "livejasmin", "stripchat", "bongacams", "cam4", "myfreecams", "fansly", "rule34", "nhentai", "hentai", "fapello", "motherless", "tnaflix", "eporner", "porntrex", "hclips", "txxx"
+];
+const adultTlds = [
+    ".xxx", ".adult", ".porn", ".sex", ".sexy", ".cam", ".tube"
+];
 
 export function isSupportedUrl(url: string | undefined): boolean {
     if (!url)
@@ -41,6 +47,9 @@ export function isSupportedUrl(url: string | undefined): boolean {
     if (isLocalOrInternalHost(hostname))
         return false;
 
+    if (isAdultHost(hostname))
+        return false;
+
     return true;
 }
 
@@ -55,4 +64,13 @@ function isLocalOrInternalHost(hostname: string): boolean {
         default:
             return false;
     }
+}
+
+function isAdultHost(hostname: string): boolean {
+    if (adultTlds.some(tld => hostname.endsWith(tld)))
+        return true;
+
+    const labels = hostname.split(".");
+
+    return adultDomains.some(name => labels.includes(name));
 }
