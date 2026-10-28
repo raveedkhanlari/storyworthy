@@ -297,6 +297,26 @@ Resources:
             Path: /api/votes/delete
             Method: POST
 
+  MailForwardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: mail-forward.handler
+      CodeUri: dist/
+      Timeout: 30
+      Environment:
+        Variables:
+          INBOUND_BUCKET: storyworthy-inbound-mail
+          FORWARD_TO: raveed.khanlari@gmail.com
+          FORWARD_FROM: privacy@storyworthyapp.com
+      Policies:
+        - S3ReadPolicy:
+            BucketName: storyworthy-inbound-mail
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendRawEmail
+              Resource: "*"
+
   # --- HTTP API with CORS --- #
   StoryWorthyApi:
     Type: AWS::Serverless::HttpApi

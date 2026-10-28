@@ -8,6 +8,7 @@ node_modules/
 # Backend build + SAM artifacts
 backend/dist
 backend/.aws-sam/
+.aws-setup/
 
 # Environment / secrets
 .env

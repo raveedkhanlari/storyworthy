@@ -11,12 +11,7 @@ export default defineConfig({
             "tabs",
         ],
         host_permissions: [
-            "https://*/*",
-            "http://*/*",
-            // "https://www.reddit.com/*",
-            // "https://reddit.com/*",
-            // "https://x.com/*",
-            // "https://api.storyworthy.app/*",
+            "https://*/*"
         ],
         icons: {
             "16": "icons/icon-16.png",
